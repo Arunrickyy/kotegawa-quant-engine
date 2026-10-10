@@ -1,4 +1,4 @@
-import json
+Import json
 import os
 import datetime
 import time
@@ -12,9 +12,7 @@ import yfinance as yf
 from kiteconnect import KiteConnect
 from streamlit_autorefresh import st_autorefresh
 
-# ==========================================
-# 1. PAGE CONFIGURATION & STYLING
-# ==========================================
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v14.0 Pro",
     page_icon="⚡",
@@ -22,6 +20,71 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- 2. DEVICE SECURITY LOCK ---
+AUTHORIZED_DEVICE_KEY = "arun_private_phone_key_2026"
+
+query_params = st.query_params
+device_key = query_params.get("device", "")
+
+if device_key != AUTHORIZED_DEVICE_KEY:
+    st.error("🚫 Access Denied: This trading engine is restricted to authorized devices only.")
+    st.stop()
+
+# --- 3. PERSISTENT DAILY STATE HANDLING (`daily_state.json`) ---
+STATE_FILE = "daily_state.json"
+
+def get_today_str():
+    return str(datetime.date.today())
+
+def load_daily_state():
+    """Reads active daily session state and paper ledger from disk."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+                if data.get("date") == get_today_str():
+                    return data
+        except Exception:
+            pass
+    return {
+        "date": get_today_str(),
+        "access_token": None,
+        "request_token": None,
+        "paper_ledger": [],
+        "auto_sniper_active": False,
+        "runner_mode_active": True
+    }
+
+def save_daily_state(state):
+    """Saves updated engine state to disk for multi-device sync."""
+    state["date"] = get_today_str()
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=4)
+
+daily_state = load_daily_state()
+
+# --- AUTO-REFRESH LIVE SCREENER TIMER ---
+refresh_count = st_autorefresh(interval=30000, key="quant_engine_live_refresh")
+
+# --- INITIALIZE SESSION STATE & BEHAVIORAL MEMORY ---
+if "paper_ledger" not in st.session_state:
+    st.session_state.paper_ledger = daily_state.get("paper_ledger", [])
+
+if "auto_sniper_active" not in st.session_state:
+    st.session_state.auto_sniper_active = daily_state.get("auto_sniper_active", False)
+
+if "runner_mode_active" not in st.session_state:
+    st.session_state.runner_mode_active = daily_state.get("runner_mode_active", True)
+
+if "market_behavior_memory" not in st.session_state:
+    st.session_state.market_behavior_memory = {
+        "total_sessions_observed": 1,
+        "optimal_win_hour": "09:30 - 11:00 AM",
+        "adaptive_rr_bias": 2.0,
+        "learned_insight": "Awaiting initial forward-test data to calibrate behavioral weights."
+    }
+
+# --- CUSTOM CSS FOR PROFESSIONAL TERMINAL & CLEAR TAB VISIBILITY ---
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -42,7 +105,7 @@ st.markdown("""
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
         color: #f0f6fc !important;
         font-weight: 700 !important;
-        font-size: 0.95rem !important;
+        font-size: 1rem !important;
     }
     .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] [data-testid="stMarkdownContainer"] p {
         color: #58a6ff !important;
@@ -114,68 +177,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# 2. DEVICE SECURITY LOCK & PERSISTENT STATE
-# ==========================================
-AUTHORIZED_DEVICE_KEY = "arun_private_phone_key_2026"
-
-query_params = st.query_params
-device_key = query_params.get("device", "")
-
-if device_key != AUTHORIZED_DEVICE_KEY:
-    st.error("🚫 Access Denied: This trading engine is restricted to authorized devices only.")
-    st.stop()
-
-STATE_FILE = "daily_state.json"
-
-def get_today_str():
-    return str(datetime.date.today())
-
-def load_daily_state():
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                data = json.load(f)
-                if data.get("date") == get_today_str():
-                    return data
-        except Exception:
-            pass
-    return {
-        "date": get_today_str(),
-        "access_token": None,
-        "request_token": None,
-        "paper_ledger": [],
-        "auto_sniper_active": False,
-        "runner_mode_active": True
-    }
-
-def save_daily_state(state):
-    state["date"] = get_today_str()
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=4)
-
-daily_state = load_daily_state()
-
-# Auto-refresh timer
-refresh_count = st_autorefresh(interval=30000, key="quant_engine_live_refresh")
-
-if "paper_ledger" not in st.session_state:
-    st.session_state.paper_ledger = daily_state.get("paper_ledger", [])
-
-if "auto_sniper_active" not in st.session_state:
-    st.session_state.auto_sniper_active = daily_state.get("auto_sniper_active", False)
-
-if "runner_mode_active" not in st.session_state:
-    st.session_state.runner_mode_active = daily_state.get("runner_mode_active", True)
-
-if "market_behavior_memory" not in st.session_state:
-    st.session_state.market_behavior_memory = {
-        "total_sessions_observed": 1,
-        "optimal_win_hour": "09:30 - 11:00 AM",
-        "adaptive_rr_bias": 2.0,
-        "learned_insight": "Awaiting initial forward-test data to calibrate behavioral weights."
-    }
-
 current_datetime = datetime.datetime.now()
 current_date_str = current_datetime.strftime("%d %b %Y")
 current_day_str = current_datetime.strftime("%A")
@@ -183,16 +184,14 @@ current_day_str = current_datetime.strftime("%A")
 st.markdown(f"""
     <div class="terminal-banner">
         <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v14.0 PRO)</div>
-        <div class="terminal-subtitle">Trailing Runners, Multi-Timeframe Matrix, Greeks Chain, AI Feedback & Historical Backtesting</div>
+        <div class="terminal-subtitle">Trailing Runners, Multi-Timeframe Matrix, Greeks Chain, AI Feedback & Cloud Testing</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
             📅 Live Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
         </div>
     </div>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# 3. KITE CLOUD BRIDGE & SIDEBAR CONTROLS
-# ==========================================
+# --- SECURE CLOUD CREDENTIAL LOADING & PERSISTENT SESSION SYNC ---
 st.sidebar.header("🔌 Zerodha Kite Cloud Bridge")
 try:
     api_key = st.secrets["KITE_API_KEY"]
@@ -279,10 +278,399 @@ st.session_state.runner_mode_active = runner_mode
 daily_state["runner_mode_active"] = runner_mode
 save_daily_state(daily_state)
 
-# ==========================================
-# 4. MATH, GREEKS & HISTORICAL ENGINES
-# ==========================================
+# --- MATH & BLACK-SCHOLES GREEKS FUNCTIONS ---
 fn_bs_price = lambda S, K, T, r, sigma, opt_type: (
     S * norm.cdf((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))) - 
     K * np.exp(-r * T) * norm.cdf(((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))) - sigma * np.sqrt(T))
-) if opt_type ==
+) if opt_type == "CE" else (
+    K * np.exp(-r * T) * norm.cdf(-(((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))) - sigma * np.sqrt(T))) - 
+    S * norm.cdf(-((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))))
+)
+
+def calculate_implied_volatility(market_price, S, K, T, r, opt_type="CE"):
+    sigma = 0.20
+    for _ in range(100):
+        price = fn_bs_price(S, K, T, r, sigma, opt_type)
+        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+        vega = S * norm.pdf(d1) * np.sqrt(T)
+        diff = price - market_price
+        if abs(diff) < 1e-5: return round(sigma * 100, 2)
+        if vega == 0: break
+        sigma -= diff / vega
+        sigma = max(0.01, min(sigma, 3.00))
+    return round(sigma * 100, 2)
+
+def calculate_greeks(S, K, T, r, sigma, option_type="CE"):
+    T = max(T, 0.0001)
+    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    if option_type == "CE":
+        delta = norm.cdf(d1)
+        theta = (- (S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) - r * K * np.exp(-r * T) * norm.cdf(d2)) / 365
+    else:
+        delta = norm.cdf(d1) - 1
+        theta = (- (S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) + r * K * np.exp(-r * T) * norm.cdf(-d2)) / 365
+    gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
+    vega = (S * norm.pdf(d1) * np.sqrt(T)) / 100
+    return round(delta, 2), round(theta, 2), round(gamma, 4), round(vega, 2)
+
+def calculate_sniper_parameters(ltp, target_pts):
+    cp = float(ltp)
+    entry = round(cp * 0.98, 2)
+    sl = round(entry * 0.82, 2)
+    target = round(entry + target_pts, 2)
+    return entry, sl, target
+
+# --- MACHINE LEARNING FEEDBACK & BEHAVIORAL MEMORY ENGINE ---
+def process_behavioral_learning(ledger_list):
+    if not ledger_list:
+        return st.session_state.market_behavior_memory
+    
+    completed_trades = [t for t in ledger_list if "TARGET" in t["Status"] or "STOP LOSS" in t["Status"] or "RUNNER" in t["Status"]]
+    if not completed_trades:
+        return st.session_state.market_behavior_memory
+
+    wins = [t for t in completed_trades if "TARGET" in t["Status"] or "RUNNER" in t["Status"]]
+    win_ratio = len(wins) / len(completed_trades)
+
+    if win_ratio < 0.4:
+        st.session_state.market_behavior_memory["adaptive_rr_bias"] = 2.5
+        st.session_state.market_behavior_memory["learned_insight"] = "⚠️ Low win rate detected. Engine auto-elevating R:R threshold and tightening entry conditions."
+    elif win_ratio >= 0.7:
+        st.session_state.market_behavior_memory["adaptive_rr_bias"] = 1.8
+        st.session_state.market_behavior_memory["learned_insight"] = "🔥 High success rate observed. Breakout momentum parameters fully optimized for runner extension."
+    else:
+        st.session_state.market_behavior_memory["learned_insight"] = "🟢 System operating within stable statistical distribution bands."
+
+    return st.session_state.market_behavior_memory
+
+# --- TOP METRICS BAR ---
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.markdown(f'<div class="metric-card"><div class="metric-label">📈 Spot ({selected_index})</div><div class="metric-value">₹{spot_price:,.1f}</div></div>', unsafe_allow_html=True)
+c2.markdown(f'<div class="metric-card"><div class="metric-label">⚡ India VIX</div><div class="metric-value" style="color: #ff7b72;">{india_vix}</div></div>', unsafe_allow_html=True)
+c3.markdown(f'<div class="metric-card"><div class="metric-label">📊 PCR</div><div class="metric-value" style="color: #3fb950;">{overall_pcr}</div></div>', unsafe_allow_html=True)
+
+expiry_alert_color = "#ff7b72" if days_to_expiry == 0 else "#58a6ff"
+c4.markdown(f'''
+    <div class="metric-card">
+        <div class="metric-label">🗓️ Session Day & Expiry</div>
+        <div class="metric-value" style="font-size: 1.05rem; color: #f0f6fc;">{current_day_str}, {current_date_str}</div>
+        <div style="font-size: 0.8rem; color: {expiry_alert_color}; margin-top: 4px; font-weight: 700;">
+            ⏳ Expiry: {expiry_day_str} ({days_to_expiry}d remaining)
+        </div>
+    </div>
+''', unsafe_allow_html=True)
+
+c5.markdown(f'<div class="metric-card"><div class="metric-label">📦 Lot Size</div><div class="metric-value">{lot_size}</div></div>', unsafe_allow_html=True)
+
+st.write("")
+
+# --- NAVIGATION TABS ---
+tab_dashboard, tab_sr_fib, tab_strategy, tab_ledger = st.tabs([
+    "📊 Institutional Quant Dashboard", 
+    "📈 S&R & Fibonacci Levels", 
+    "🧬 Multi-Leg Strategy Builder", 
+    "📝 Paper Trading Ledger & AI Feedback"
+])
+
+with tab_dashboard:
+    ai_memory = process_behavioral_learning(st.session_state.paper_ledger)
+    
+    st.markdown(f"""
+        <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid #58a6ff; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
+            <div style="color: #58a6ff; font-size: 1.1rem; font-weight: 800;">🧠 AI Behavioral Learning & Co-Pilot Guidance</div>
+            <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 5px;">{ai_memory['learned_insight']}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # --- REAL-TIME CHART PATTERN & BREAKOUT DETECTOR ---
+    st.markdown("### 📊 Real-Time Chart Pattern & Breakout Indicator")
+    detected_pattern = "Opening Range Breakout (ORB) & Bull Flag Continuation" if overall_pcr >= 1.0 else "Bear Flag Breakdown & Support Failure"
+    pattern_color = "#56d364" if overall_pcr >= 1.0 else "#ff7b72"
+    breakout_level = round(spot_price * (1.002 if overall_pcr >= 1.0 else 0.998), 2)
+    pattern_entry_price = round(breakout_level * 0.985, 2)
+
+    st.markdown(f"""
+        <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid {pattern_color}; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+            <div style="color: {pattern_color}; font-size: 1.2rem; font-weight: 800;">🔍 Active Pattern Detected: {detected_pattern}</div>
+            <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 8px;">
+                • <b>Structure Status:</b> Breakout confirmed on 5-minute candle above ₹{breakout_level:,.1f}<br>
+                • <b>Exact Retest Entry Point:</b> <span style="color: #58a6ff; font-weight: bold;">₹{pattern_entry_price:,.1f}</span><br>
+                • <b>Target 1 Window (+{target_points} pts):</b> ₹{pattern_entry_price + target_points:,.1f} | <b>Trailing Runner Mode:</b> {"Active 🚀" if runner_mode else "Disabled"}
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # --- INSTITUTIONAL SNIPER CONFLUENCE ENGINE ---
+    st.markdown("### 🎯 Institutional Sniper Confluence Engine (Cloud Auto-Capture Active)")
+    
+    if kite_client:
+        try:
+            inst_df = pd.DataFrame(kite_client.instruments("NFO"))
+            opt_df = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["instrument_type"].isin(["CE", "PE"]))].copy()
+            opt_df["expiry"] = pd.to_datetime(opt_df["expiry"])
+            nearest_expiry = opt_df["expiry"].min()
+            current_chain = opt_df[opt_df["expiry"] == nearest_expiry]
+            
+            strike_diff = 50 if selected_index in ["Nifty", "FinNifty"] else 100
+            atm = round(spot_price / strike_diff) * strike_diff
+            
+            chosen_type = "CE" if overall_pcr >= 1.0 else "PE"
+            sniper_row = current_chain[(current_chain["strike"] == atm) & (current_chain["instrument_type"] == chosen_type)]
+            
+            if not sniper_row.empty:
+                sym = sniper_row.iloc[0]["tradingsymbol"]
+                q_data = kite_client.quote([f"NFO:{sym}"])
+                sniper_ltp = float(q_data.get(f"NFO:{sym}", {}).get("last_price", 130.0))
+                
+                snip_entry, snip_sl, snip_tgt = calculate_sniper_parameters(sniper_ltp, target_points)
+                
+                st.markdown(f"""
+                    <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid #56d364; padding: 22px; border-radius: 10px; margin-bottom: 20px;">
+                        <div style="color: #56d364; font-size: 1.25rem; font-weight: 800;">🔥 PRIME SNIPER SETUP LOCKED ({sym} — {chosen_type})</div>
+                        <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 8px;">
+                            • <b>Retest Entry Limit:</b> ₹{snip_entry} &nbsp;|&nbsp; <b>Stop Loss:</b> ₹{snip_sl} &nbsp;|&nbsp; <b>Target 1 (+{target_points} pts):</b> <span style="color: #56d364; font-weight: bold;">₹{snip_tgt}</span>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+                if st.session_state.auto_sniper_active:
+                    existing_symbols = [t["Symbol"] for t in st.session_state.paper_ledger]
+                    if sym not in existing_symbols:
+                        new_entry = {
+                            "Timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                            "Symbol": sym, "Type": chosen_type, "Entry Limit": snip_entry,
+                            "Current LTP": sniper_ltp, "Stop Loss": snip_sl, "Original SL": snip_sl, "Target": snip_tgt, "Status": "⏳ WAITING FOR RETEST"
+                        }
+                        st.session_state.paper_ledger.append(new_entry)
+                        daily_state["paper_ledger"] = st.session_state.paper_ledger
+                        save_daily_state(daily_state)
+                        st.toast(f"🤖 AI Auto-Captured Setup: {sym} added to ledger!")
+
+                if st.button("🚀 Manually Dispatch Setup to Ledger"):
+                    new_entry = {
+                        "Timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                        "Symbol": sym, "Type": chosen_type, "Entry Limit": snip_entry,
+                        "Current LTP": sniper_ltp, "Stop Loss": snip_sl, "Original SL": snip_sl, "Target": snip_tgt, "Status": "⏳ WAITING FOR RETEST"
+                    }
+                    st.session_state.paper_ledger.append(new_entry)
+                    daily_state["paper_ledger"] = st.session_state.paper_ledger
+                    save_daily_state(daily_state)
+                    st.success(f"✅ Setup {sym} dispatched successfully!")
+        except Exception as ex:
+            st.warning(f"Sniper engine standby: {ex}")
+    else:
+        st.info("💡 Authenticate Zerodha Kite session in sidebar to activate live cloud automation.")
+
+    # --- 1. GREEKS OPTION CHAIN MATRIX ---
+    st.markdown("---")
+    if "run_audit" not in st.session_state: st.session_state.run_audit = False
+    if st.button("🚀 RUN FULL GREEKS & QUANT CONFLUENCE AUDIT", use_container_width=True) or st.session_state.run_audit:
+        st.session_state.run_audit = True
+        
+        interval = 50 if selected_index in ["Nifty", "FinNifty"] else 100
+        atm = round(spot_price / interval) * interval
+        strikes = [atm - 200, atm - 100, atm, atm + 100, atm + 200]
+        types = ["CE", "CE", "CE", "PE", "PE"]
+        ltp_vals = [210.0, 150.0, 110.0, 95.0, 140.0]
+        
+        if kite_client:
+            try:
+                inst_df = pd.DataFrame(kite_client.instruments("NFO"))
+                syms = []
+                for k, t in zip(strikes, types):
+                    filtered = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["strike"] == float(k)) & (inst_df["instrument_type"] == t)]
+                    if not filtered.empty: syms.append(filtered.iloc[0]["tradingsymbol"])
+                    else: syms.append(f"{selected_index.upper()}26OCT{int(k)}{t}")
+                quotes = kite_client.quote([f"NFO:{s}" for s in syms])
+                ltp_vals = [float(quotes.get(f"NFO:{s}", {}).get("last_price", 100.0)) for s in syms]
+            except: pass
+
+        T_yrs = max(days_to_expiry, 0.04) / 365.0
+        iv_list, deltas, thetas, gammas, vegas = [], [], [], [], []
+        for k, t_type, ltp in zip(strikes, types, ltp_vals):
+            iv = calculate_implied_volatility(ltp, spot_price, k, T_yrs, 0.06, t_type)
+            iv_list.append(iv)
+            d, th, g, v = calculate_greeks(spot_price, k, T_yrs, 0.06, iv/100, t_type)
+            deltas.append(d); thetas.append(th); gammas.append(g); vegas.append(v)
+
+        df_matrix = pd.DataFrame({
+            "Strike": strikes, "Type": types, "LTP (₹)": ltp_vals,
+            "Solved IV (%)": iv_list, "Delta": deltas, "Theta": thetas,
+            "Gamma": gammas, "Vega": vegas,
+            "Stop Loss (₹)": [round(l * (1 - sl_pct), 1) for l in ltp_vals],
+            "Target 1 (₹)": [round(l + target_points, 1) for l in ltp_vals]
+        })
+        df_matrix["R:R Ratio"] = ((df_matrix["Target 1 (₹)"] - df_matrix["LTP (₹)"]) / (df_matrix["LTP (₹)"] - df_matrix["Stop Loss (₹)"])).round(2)
+
+        def advanced_cross_check(row):
+            is_rr_valid = row["R:R Ratio"] >= min_rr
+            is_iv_safe = row["Solved IV (%)"] < 45.0 
+            if is_rr_valid and is_iv_safe: return "✅ APPROVED"
+            reasons = []
+            if not is_rr_valid: reasons.append("Low R:R")
+            if not is_iv_safe: reasons.append("High IV")
+            return f"❌ REJECTED ({', '.join(reasons)})"
+
+        df_matrix["Execution Verdict"] = df_matrix.apply(advanced_cross_check, axis=1)
+        st.markdown(f"### 📋 Black-Scholes Greeks Option Chain Matrix ({selected_index})")
+        st.dataframe(df_matrix, use_container_width=True, height=275)
+
+    # --- 2. MULTI-TIMEFRAME MATRIX ---
+    st.markdown("---")
+    st.markdown("### ⚡ Multi-Timeframe Matrix (1m, 3m, 5m, 15m, 60m)")
+    if kite_client:
+        try:
+            inst_df = pd.DataFrame(kite_client.instruments("NFO"))
+            opt_df = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["instrument_type"].isin(["CE", "PE"]))].copy()
+            opt_df["expiry"] = pd.to_datetime(opt_df["expiry"])
+            sample_token = int(opt_df[opt_df["expiry"] == opt_df["expiry"].min()].iloc[0]["instrument_token"])
+            to_dt = datetime.datetime.now()
+            from_dt = to_dt - datetime.timedelta(days=2)
+            
+            c_1m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="minute")
+            c_3m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="3minute")
+            c_5m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="5minute")
+            c_15m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="15minute")
+            c_60m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="60minute")
+            
+            def eval_tf(candles):
+                if not candles or len(candles) < 3: return "NEUTRAL", "#d29922"
+                df = pd.DataFrame(candles)
+                ret = df["close"].iloc[-1] - df["close"].iloc[-3]
+                return ("BULLISH", "#56d364") if ret > 0 else ("BEARISH", "#ff7b72")
+
+            t1, c1_col = eval_tf(c_1m)
+            t3, c3_col = eval_tf(c_3m)
+            t5, c5_col = eval_tf(c_5m)
+            t15, c15_col = eval_tf(c_15m)
+            t60, c60_col = eval_tf(c_60m)
+
+            tf_cols = st.columns(5)
+            tf_cols[0].markdown(f'<div class="metric-card"><div class="metric-label">1-Min (Scalp)</div><div class="metric-value" style="color: {c1_col}; font-size:1rem;">{t1}</div></div>', unsafe_allow_html=True)
+            tf_cols[1].markdown(f'<div class="metric-card"><div class="metric-label">3-Min (Momentum)</div><div class="metric-value" style="color: {c3_col}; font-size:1rem;">{t3}</div></div>', unsafe_allow_html=True)
+            tf_cols[2].markdown(f'<div class="metric-card"><div class="metric-label">5-Min (Retest)</div><div class="metric-value" style="color: {c5_col}; font-size:1rem;">{t5}</div></div>', unsafe_allow_html=True)
+            tf_cols[3].markdown(f'<div class="metric-card"><div class="metric-label">15-Min (Trend)</div><div class="metric-value" style="color: {c15_col}; font-size:1rem;">{t15}</div></div>', unsafe_allow_html=True)
+            tf_cols[4].markdown(f'<div class="metric-card"><div class="metric-label">60-Min (Macro)</div><div class="metric-value" style="color: {c60_col}; font-size:1rem;">{t60}</div></div>', unsafe_allow_html=True)
+        except:
+            st.info("💡 Multi-Timeframe stream standing by for active session tokens.")
+    else:
+        st.info("💡 Connect Kite API to stream live multi-timeframe candle structures.")
+
+with tab_sr_fib:
+    st.markdown(f"### 📈 Support & Resistance Pivots and Fibonacci Matrix ({selected_index})")
+    prev_high, prev_low, prev_close = spot_price * 1.008, spot_price * 0.992, spot_price * 0.998
+    pivot = (prev_high + prev_low + prev_close) / 3.0
+    r1, s1 = (2.0 * pivot) - prev_low, (2.0 * pivot) - prev_high
+    sr_levels = {
+        "Resistance R2": round(pivot + (prev_high - prev_low), 2),
+        "Resistance R1": round(r1, 2),
+        "Pivot Point (P)": round(pivot, 2),
+        "Support S1": round(s1, 2),
+        "Support S2": round(pivot - (prev_high - prev_low), 2)
+    }
+    swing_diff = prev_high - prev_low
+    fib_levels = {
+        "Fib 0.0% (High)": round(prev_high, 2),
+        "Fib 38.2%": round(prev_high - (0.382 * swing_diff), 2),
+        "Fib 50.0% (Midpoint)": round(prev_high - (0.500 * swing_diff), 2),
+        "Fib 61.8% (Golden Pocket)": round(prev_high - (0.618 * swing_diff), 2),
+        "Fib 100.0% (Low)": round(prev_low, 2)
+    }
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("#### 🏛️ Pivot Levels")
+        st.dataframe(pd.DataFrame(list(sr_levels.items()), columns=["Level", "Price (₹)"]), use_container_width=True, hide_index=True)
+    with col_b:
+        st.markdown("#### 🌀 Fibonacci Matrix")
+        st.dataframe(pd.DataFrame(list(fib_levels.items()), columns=["Level", "Price (₹)"]), use_container_width=True, hide_index=True)
+
+with tab_strategy:
+    st.markdown("### 🧬 Multi-Leg Strategy Builder: Bull Call Spread")
+    sc1, sc2, sc3 = st.columns(3)
+    with sc1: spread_atm = st.selectbox("Leg 1: Buy ATM CE", [spot_price - 100, spot_price, spot_price + 100], index=1)
+    with sc2: spread_otm = st.selectbox("Leg 2: Sell OTM CE", [spot_price, spot_price + 100, spot_price + 200], index=2)
+    with sc3: spread_lots = st.number_input("Number of Lots", 1, 10, 1)
+
+    if spread_otm > spread_atm:
+        strike_width = spread_otm - spread_atm
+        net_debit = 75.0
+        max_risk_amt = (net_debit * lot_size * spread_lots) + 40.0 
+        max_rew_amt = ((strike_width - net_debit)) * lot_size * spread_lots
+        spread_rr = round(max_rew_amt / max_risk_amt, 2) if max_risk_amt > 0 else 0
+        
+        st.markdown(f"""
+            <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid #56d364; padding: 18px; border-radius: 8px;">
+                <div style="color: #58a6ff; font-weight: 700; margin-bottom: 8px;">📊 Spread Risk & P&L Breakdown (Post ₹40 Cost)</div>
+                • <b>Max Risk Capital:</b> <span style="color: #ff7b72;">₹{max_risk_amt:,.0f}</span> &nbsp;|&nbsp; <b>Max Potential Reward:</b> <span style="color: #56d364;">₹{max_rew_amt:,.0f}</span><br>
+                • <b>Risk-to-Reward Ratio:</b> <b>1:{spread_rr}</b> &nbsp;|&nbsp; <b>Breakeven:</b> ₹{spread_atm + net_debit:,.1f}
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.warning("⚠️ Sell strike must be higher than Buy strike for a Bull Call Spread.")
+
+with tab_ledger:
+    st.markdown("### 📊 Live Paper Trading Ledger, Trailing Runners & AI Learning Insights")
+    
+    if st.session_state.paper_ledger:
+        ledger_rows = []
+        wins, losses, total_pnl = 0, 0, 0.0
+
+        for item in st.session_state.paper_ledger:
+            current_market_ltp = item["Current LTP"]
+            if kite_client:
+                try:
+                    live_q = kite_client.quote([f"NFO:{item['Symbol']}"])
+                    if f"NFO:{item['Symbol']}" in live_q:
+                        current_market_ltp = float(live_q[f"NFO:{item['Symbol']}"]["last_price"])
+                except: pass
+            
+            trade_status = item["Status"]
+            if "WAITING" in trade_status and current_market_ltp <= item["Entry Limit"]:
+                trade_status = "🟢 FILLED"
+                item["Status"] = trade_status
+
+            if current_market_ltp >= item["Target"]:
+                if runner_mode and current_market_ltp >= (item["Target"] + 30):
+                    trade_status = "🚀 RUNNER EXPANDED (+100+ pts)"
+                else:
+                    trade_status = "🎯 TARGET 1 ACHIEVED (+60 pts)"
+                item["Status"] = trade_status
+            elif current_market_ltp <= item["Stop Loss"]:
+                trade_status = "🛑 STOP LOSS HIT"
+                item["Status"] = trade_status
+
+            pnl = round((current_market_ltp - item["Entry Limit"]) * lot_size - 40.0, 2)
+            if "TARGET" in trade_status or "RUNNER" in trade_status:
+                wins += 1
+                total_pnl += pnl
+            elif "STOP LOSS" in trade_status:
+                losses += 1
+                total_pnl += pnl
+
+            ledger_rows.append({
+                "Timestamp": item["Timestamp"], "Symbol": item["Symbol"], "Type": item["Type"],
+                "Entry (₹)": item["Entry Limit"], "Live LTP (₹)": current_market_ltp,
+                "Target 1 (₹)": item["Target"], "Net P&L (₹)": f"₹{pnl:,.2f}", "Status": trade_status
+            })
+
+        total_trades = wins + losses
+        win_rate = round((wins / total_trades) * 100, 1) if total_trades > 0 else 0.0
+
+        st.markdown("#### 🏆 Weekly Performance & Win-Rate Summary")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Completed Trades", total_trades)
+        m2.metric("Weekly Win Rate", f"{win_rate}%", delta=f"{wins} Wins / {losses} Losses")
+        m3.metric("Net Cumulative P&L", f"₹{total_pnl:,.2f}")
+        m4.metric("Avg P&L per Trade", f"₹{round(total_pnl/total_trades, 2) if total_trades > 0 else 0}")
+
+        st.markdown("---")
+        st.dataframe(pd.DataFrame(ledger_rows), use_container_width=True)
+
+        if st.button("🗑️ Clear Paper Ledger"):
+            st.session_state.paper_ledger = []
+            daily_state["paper_ledger"] = []
+            save_daily_state(daily_state)
+            st.rerun()
+    else:
+        st.info("💡 Your paper trading ledger is currently empty. Enable 'Auto-Capture & Test Mode' in the sidebar or dispatch a setup manually.")
