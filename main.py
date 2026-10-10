@@ -12,7 +12,9 @@ import yfinance as yf
 from kiteconnect import KiteConnect
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. PAGE CONFIGURATION ---
+# ==========================================
+# 1. PAGE CONFIGURATION & STYLING
+# ==========================================
 st.set_page_config(
     page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v14.0 Pro",
     page_icon="⚡",
@@ -20,71 +22,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- 2. DEVICE SECURITY LOCK ---
-AUTHORIZED_DEVICE_KEY = "arun_private_phone_key_2026"
-
-query_params = st.query_params
-device_key = query_params.get("device", "")
-
-if device_key != AUTHORIZED_DEVICE_KEY:
-    st.error("🚫 Access Denied: This trading engine is restricted to authorized devices only.")
-    st.stop()
-
-# --- 3. PERSISTENT DAILY STATE HANDLING (`daily_state.json`) ---
-STATE_FILE = "daily_state.json"
-
-def get_today_str():
-    return str(datetime.date.today())
-
-def load_daily_state():
-    """Reads active daily session state and paper ledger from disk."""
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r") as f:
-                data = json.load(f)
-                if data.get("date") == get_today_str():
-                    return data
-        except Exception:
-            pass
-    return {
-        "date": get_today_str(),
-        "access_token": None,
-        "request_token": None,
-        "paper_ledger": [],
-        "auto_sniper_active": False,
-        "runner_mode_active": True
-    }
-
-def save_daily_state(state):
-    """Saves updated engine state to disk for multi-device sync."""
-    state["date"] = get_today_str()
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=4)
-
-daily_state = load_daily_state()
-
-# --- AUTO-REFRESH LIVE SCREENER TIMER ---
-refresh_count = st_autorefresh(interval=30000, key="quant_engine_live_refresh")
-
-# --- INITIALIZE SESSION STATE & BEHAVIORAL MEMORY ---
-if "paper_ledger" not in st.session_state:
-    st.session_state.paper_ledger = daily_state.get("paper_ledger", [])
-
-if "auto_sniper_active" not in st.session_state:
-    st.session_state.auto_sniper_active = daily_state.get("auto_sniper_active", False)
-
-if "runner_mode_active" not in st.session_state:
-    st.session_state.runner_mode_active = daily_state.get("runner_mode_active", True)
-
-if "market_behavior_memory" not in st.session_state:
-    st.session_state.market_behavior_memory = {
-        "total_sessions_observed": 1,
-        "optimal_win_hour": "09:30 - 11:00 AM",
-        "adaptive_rr_bias": 2.0,
-        "learned_insight": "Awaiting initial forward-test data to calibrate behavioral weights."
-    }
-
-# --- CUSTOM CSS FOR PROFESSIONAL TERMINAL & CLEAR TAB VISIBILITY ---
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -177,6 +114,68 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# ==========================================
+# 2. DEVICE SECURITY LOCK & PERSISTENT STATE
+# ==========================================
+AUTHORIZED_DEVICE_KEY = "arun_private_phone_key_2026"
+
+query_params = st.query_params
+device_key = query_params.get("device", "")
+
+if device_key != AUTHORIZED_DEVICE_KEY:
+    st.error("🚫 Access Denied: This trading engine is restricted to authorized devices only.")
+    st.stop()
+
+STATE_FILE = "daily_state.json"
+
+def get_today_str():
+    return str(datetime.date.today())
+
+def load_daily_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+                if data.get("date") == get_today_str():
+                    return data
+        except Exception:
+            pass
+    return {
+        "date": get_today_str(),
+        "access_token": None,
+        "request_token": None,
+        "paper_ledger": [],
+        "auto_sniper_active": False,
+        "runner_mode_active": True
+    }
+
+def save_daily_state(state):
+    state["date"] = get_today_str()
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=4)
+
+daily_state = load_daily_state()
+
+# Auto-refresh timer
+refresh_count = st_autorefresh(interval=30000, key="quant_engine_live_refresh")
+
+if "paper_ledger" not in st.session_state:
+    st.session_state.paper_ledger = daily_state.get("paper_ledger", [])
+
+if "auto_sniper_active" not in st.session_state:
+    st.session_state.auto_sniper_active = daily_state.get("auto_sniper_active", False)
+
+if "runner_mode_active" not in st.session_state:
+    st.session_state.runner_mode_active = daily_state.get("runner_mode_active", True)
+
+if "market_behavior_memory" not in st.session_state:
+    st.session_state.market_behavior_memory = {
+        "total_sessions_observed": 1,
+        "optimal_win_hour": "09:30 - 11:00 AM",
+        "adaptive_rr_bias": 2.0,
+        "learned_insight": "Awaiting initial forward-test data to calibrate behavioral weights."
+    }
+
 current_datetime = datetime.datetime.now()
 current_date_str = current_datetime.strftime("%d %b %Y")
 current_day_str = current_datetime.strftime("%A")
@@ -191,7 +190,9 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-# --- SECURE CLOUD CREDENTIAL LOADING & PERSISTENT SESSION SYNC ---
+# ==========================================
+# 3. KITE CLOUD BRIDGE & SIDEBAR CONTROLS
+# ==========================================
 st.sidebar.header("🔌 Zerodha Kite Cloud Bridge")
 try:
     api_key = st.secrets["KITE_API_KEY"]
@@ -278,43 +279,10 @@ st.session_state.runner_mode_active = runner_mode
 daily_state["runner_mode_active"] = runner_mode
 save_daily_state(daily_state)
 
-# --- MATH & BLACK-SCHOLES GREEKS FUNCTIONS ---
+# ==========================================
+# 4. MATH, GREEKS & HISTORICAL ENGINES
+# ==========================================
 fn_bs_price = lambda S, K, T, r, sigma, opt_type: (
     S * norm.cdf((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))) - 
     K * np.exp(-r * T) * norm.cdf(((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))) - sigma * np.sqrt(T))
-) if opt_type == "CE" else (
-    K * np.exp(-r * T) * norm.cdf(-(((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))) - sigma * np.sqrt(T))) - 
-    S * norm.cdf(-((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))))
-)
-
-def calculate_implied_volatility(market_price, S, K, T, r, opt_type="CE"):
-    sigma = 0.20
-    for _ in range(100):
-        price = fn_bs_price(S, K, T, r, sigma, opt_type)
-        d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-        vega = S * norm.pdf(d1) * np.sqrt(T)
-        diff = price - market_price
-        if abs(diff) < 1e-5: return round(sigma * 100, 2)
-        if vega == 0: break
-        sigma -= diff / vega
-        sigma = max(0.01, min(sigma, 3.00))
-    return round(sigma * 100, 2)
-
-def calculate_greeks(S, K, T, r, sigma, option_type="CE"):
-    T = max(T, 0.0001)
-    d1 = (np.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * np.sqrt(T))
-    d2 = d1 - sigma * np.sqrt(T)
-    if option_type == "CE":
-        delta = norm.cdf(d1)
-        theta = (- (S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) - r * K * np.exp(-r * T) * norm.cdf(d2)) / 365
-    else:
-        delta = norm.cdf(d1) - 1
-        theta = (- (S * norm.pdf(d1) * sigma) / (2 * np.sqrt(T)) + r * K * np.exp(-r * T) * norm.cdf(-d2)) / 365
-    gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
-    vega = (S * norm.pdf(d1) * np.sqrt(T)) / 100
-    return round(delta, 2), round(theta, 2), round(gamma, 4), round(vega, 2)
-
-def calculate_sniper_parameters(ltp, target_pts):
-    cp = float(ltp)
-    entry = round(cp * 0.98, 2)
-    sl = round(entry * 0.82, 2)
+) if opt_type ==
