@@ -1,3 +1,5 @@
+import json
+import os
 import datetime
 import time
 import pandas as pd
@@ -9,7 +11,7 @@ import yfinance as yf
 from kiteconnect import KiteConnect
 from streamlit_autorefresh import st_autorefresh
 
-# --- PAGE CONFIGURATION ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v14.0 Pro",
     page_icon="⚡",
@@ -17,18 +19,61 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# --- 2. DEVICE SECURITY LOCK ---
+AUTHORIZED_DEVICE_KEY = "arun_private_phone_key_2026"
+
+query_params = st.query_params
+device_key = query_params.get("device", "")
+
+if device_key != AUTHORIZED_DEVICE_KEY:
+    st.error("🚫 Access Denied: This trading engine is restricted to authorized devices only.")
+    st.stop()
+
+# --- 3. PERSISTENT DAILY STATE HANDLING (`daily_state.json`) ---
+STATE_FILE = "daily_state.json"
+
+def get_today_str():
+    return str(datetime.date.today())
+
+def load_daily_state():
+    """Reads active daily session state and paper ledger from disk."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+                if data.get("date") == get_today_str():
+                    return data
+        except Exception:
+            pass
+    return {
+        "date": get_today_str(),
+        "access_token": None,
+        "request_token": None,
+        "paper_ledger": [],
+        "auto_sniper_active": False,
+        "runner_mode_active": True
+    }
+
+def save_daily_state(state):
+    """Saves updated engine state to disk for multi-device sync."""
+    state["date"] = get_today_str()
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=4)
+
+daily_state = load_daily_state()
+
 # --- AUTO-REFRESH LIVE SCREENER TIMER ---
 refresh_count = st_autorefresh(interval=30000, key="quant_engine_live_refresh")
 
 # --- INITIALIZE SESSION STATE & BEHAVIORAL MEMORY ---
 if "paper_ledger" not in st.session_state:
-    st.session_state.paper_ledger = []
+    st.session_state.paper_ledger = daily_state.get("paper_ledger", [])
 
 if "auto_sniper_active" not in st.session_state:
-    st.session_state.auto_sniper_active = False
+    st.session_state.auto_sniper_active = daily_state.get("auto_sniper_active", False)
 
 if "runner_mode_active" not in st.session_state:
-    st.session_state.runner_mode_active = True
+    st.session_state.runner_mode_active = daily_state.get("runner_mode_active", True)
 
 if "market_behavior_memory" not in st.session_state:
     st.session_state.market_behavior_memory = {
@@ -145,7 +190,7 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-# --- SECURE CLOUD CREDENTIAL LOADING (STREAMLIT SECRETS) ---
+# --- SECURE CLOUD CREDENTIAL LOADING & PERSISTENT SESSION SYNC ---
 st.sidebar.header("🔌 Zerodha Kite Cloud Bridge")
 try:
     api_key = st.secrets["KITE_API_KEY"]
@@ -155,25 +200,28 @@ except:
     api_key = st.sidebar.text_input("Kite API Key", type="password")
     api_secret = st.sidebar.text_input("Kite API Secret", type="password")
 
-if "kite_access_token" not in st.session_state:
-    st.session_state.kite_access_token = None
-
 kite_client = None
 if api_key and api_secret:
     try:
         kite = KiteConnect(api_key=api_key)
-        if not st.session_state.kite_access_token:
+        if not daily_state.get("access_token"):
             login_url = kite.login_url()
             st.sidebar.markdown(f"[🔗 Authorize Daily Kite Session]({login_url})", unsafe_allow_html=True)
-            request_token = st.sidebar.text_input("Paste Daily Request Token Here:")
-            if request_token:
+            token_or_url = st.sidebar.text_input("Paste Request Token or Full Redirect URL (PC):", type="password")
+            if token_or_url:
+                parsed = urlparse.urlparse(token_or_url)
+                extracted_token = urlparse.parse_qs(parsed.query).get("request_token", [None])[0]
+                request_token = extracted_token if extracted_token else token_or_url.strip()
+                
                 data = kite.generate_session(request_token, api_secret=api_secret)
-                st.session_state.kite_access_token = data["access_token"]
-                st.sidebar.success("✅ Cloud Session Authenticated!")
+                daily_state["access_token"] = data["access_token"]
+                daily_state["request_token"] = request_token
+                save_daily_state(daily_state)
+                st.sidebar.success("✅ Cloud Session Authenticated & Synced Globally!")
                 st.rerun()
         else:
-            st.sidebar.success("🟢 Cloud Feed Active")
-            kite.set_access_token(st.session_state.kite_access_token)
+            st.sidebar.success("🟢 Cloud Feed Active (Global Sync)")
+            kite.set_access_token(daily_state["access_token"])
             kite_client = kite
     except Exception as e:
         st.sidebar.error(f"Auth Error: {e}")
@@ -222,9 +270,12 @@ st.sidebar.markdown("---")
 st.sidebar.header("🤖 Automation & Runner Controls")
 auto_forward_test = st.sidebar.toggle("Enable Auto-Capture & Test Mode", value=st.session_state.auto_sniper_active)
 st.session_state.auto_sniper_active = auto_forward_test
+daily_state["auto_sniper_active"] = auto_forward_test
 
 runner_mode = st.sidebar.toggle("Enable Trailing Runner Mode (Past 70+ pts)", value=st.session_state.runner_mode_active)
 st.session_state.runner_mode_active = runner_mode
+daily_state["runner_mode_active"] = runner_mode
+save_daily_state(daily_state)
 
 # --- MATH & BLACK-SCHOLES GREEKS FUNCTIONS ---
 fn_bs_price = lambda S, K, T, r, sigma, opt_type: (
@@ -385,19 +436,25 @@ with tab_dashboard:
                 if st.session_state.auto_sniper_active:
                     existing_symbols = [t["Symbol"] for t in st.session_state.paper_ledger]
                     if sym not in existing_symbols:
-                        st.session_state.paper_ledger.append({
+                        new_entry = {
                             "Timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
                             "Symbol": sym, "Type": chosen_type, "Entry Limit": snip_entry,
                             "Current LTP": sniper_ltp, "Stop Loss": snip_sl, "Original SL": snip_sl, "Target": snip_tgt, "Status": "⏳ WAITING FOR RETEST"
-                        })
+                        }
+                        st.session_state.paper_ledger.append(new_entry)
+                        daily_state["paper_ledger"] = st.session_state.paper_ledger
+                        save_daily_state(daily_state)
                         st.toast(f"🤖 AI Auto-Captured Setup: {sym} added to ledger!")
 
                 if st.button("🚀 Manually Dispatch Setup to Ledger"):
-                    st.session_state.paper_ledger.append({
+                    new_entry = {
                         "Timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
                         "Symbol": sym, "Type": chosen_type, "Entry Limit": snip_entry,
                         "Current LTP": sniper_ltp, "Stop Loss": snip_sl, "Original SL": snip_sl, "Target": snip_tgt, "Status": "⏳ WAITING FOR RETEST"
-                    })
+                    }
+                    st.session_state.paper_ledger.append(new_entry)
+                    daily_state["paper_ledger"] = st.session_state.paper_ledger
+                    save_daily_state(daily_state)
                     st.success(f"✅ Setup {sym} dispatched successfully!")
         except Exception as ex:
             st.warning(f"Sniper engine standby: {ex}")
@@ -447,7 +504,7 @@ with tab_dashboard:
 
         def advanced_cross_check(row):
             is_rr_valid = row["R:R Ratio"] >= min_rr
-            is_iv_safe = row["Solved IV (%)"] < 45.0  
+            is_iv_safe = row["Solved IV (%)"] < 45.0 
             if is_rr_valid and is_iv_safe: return "✅ APPROVED"
             reasons = []
             if not is_rr_valid: reasons.append("Low R:R")
@@ -572,7 +629,6 @@ with tab_ledger:
                 trade_status = "🟢 FILLED"
                 item["Status"] = trade_status
 
-            # TRAILING RUNNER & TARGET LOGIC
             if current_market_ltp >= item["Target"]:
                 if runner_mode and current_market_ltp >= (item["Target"] + 30):
                     trade_status = "🚀 RUNNER EXPANDED (+100+ pts)"
@@ -612,6 +668,8 @@ with tab_ledger:
 
         if st.button("🗑️ Clear Paper Ledger"):
             st.session_state.paper_ledger = []
+            daily_state["paper_ledger"] = []
+            save_daily_state(daily_state)
             st.rerun()
     else:
         st.info("💡 Your paper trading ledger is currently empty. Enable 'Auto-Capture & Test Mode' in the sidebar or dispatch a setup manually.")
