@@ -673,4 +673,4 @@ with tab_ledger:
             save_daily_state(daily_state)
             st.rerun()
     else:
-        st.info("💡 Your paper trading ledger is currently empty. Enable 'Auto-Capture & Test Mode' in the sidebar or dispatch a setup manually.")
+        st.info("💡 Your paper trading ledger is currently empty. Enable 'Auto-Capture & Test Mode' in the sidebar or dispatch a setup manually.") 
