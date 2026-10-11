@@ -84,7 +84,7 @@ if "market_behavior_memory" not in st.session_state:
         "learned_insight": "Awaiting initial forward-test data to calibrate behavioral weights."
     }
 
-# --- CUSTOM CSS FOR PROFESSIONAL TERMINAL & CLEAR TAB VISIBILITY ---
+# --- CUSTOM CSS FOR HIGH-CONTRAST TERMINAL ---
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
@@ -102,15 +102,25 @@ st.markdown("""
         color: #f0f6fc;
     }
 
+    /* --- FIX INVISIBLE TAB HEADERS --- */
     .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
-        color: #f0f6fc !important;
+        color: #f0f6fc !important; /* Pure crisp white for all unselected tabs */
         font-weight: 700 !important;
-        font-size: 1rem !important;
+        font-size: 1.05rem !important;
     }
     .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] [data-testid="stMarkdownContainer"] p {
-        color: #58a6ff !important;
+        color: #58a6ff !important; /* Glowing Blue for active tab */
+        font-weight: 800 !important;
     }
 
+    /* --- FIX INVISIBLE SLIDER & INPUT LABELS --- */
+    label[data-testid="stWidgetLabel"] p, label[data-testid="stWidgetLabel"] span {
+        color: #ffffff !important; /* Bright White for all slider/input titles */
+        font-weight: 700 !important;
+        font-size: 0.95rem !important;
+    }
+
+    /* --- TERMINAL CARDS & BANNER --- */
     .terminal-banner {
         background: linear-gradient(135deg, #161b22 0%, #0d1117 100%);
         border: 1px solid #30363d;
@@ -152,6 +162,7 @@ st.markdown("""
         font-weight: 700;
     }
 
+    /* --- BUTTON STYLING --- */
     .stButton > button {
         background: linear-gradient(135deg, #238636 0%, #2ea043 100%);
         color: white;
@@ -167,16 +178,16 @@ st.markdown("""
         border-color: #56d364;
     }
 
+    /* --- SIDEBAR STYLING --- */
     section[data-testid="stSidebar"] {
         background-color: #0d1117;
         border-right: 1px solid #30363d;
     }
     section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] span {
-        color: #c9d1d9 !important;
+        color: #ffffff !important;
     }
     </style>
 """, unsafe_allow_html=True)
-
 current_datetime = datetime.datetime.now()
 current_date_str = current_datetime.strftime("%d %b %Y")
 current_day_str = current_datetime.strftime("%A")
