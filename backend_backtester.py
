@@ -1,0 +1,119 @@
+import os
+import datetime
+import json
+import pandas as pd
+import numpy as np
+from kiteconnect import KiteConnect
+
+# --- CONFIGURATION ---
+BACKTEST_OUTPUT_FILE = "backtest_results.json"
+CACHE_CSV = "kite_historical_cache.csv"
+
+def detect_candlestick_patterns(candles_df, i):
+    """Institutional candle pattern recognition for backend simulation."""
+    if i < 2: 
+        return "Standard", False
+    c1, c2, c3 = candles_df.iloc[i-2], candles_df.iloc[i-1], candles_df.iloc[i]
+    
+    body = abs(c3["close"] - c3["open"])
+    rng = c3["high"] - c3["low"]
+    lower_wick = min(c3["open"], c3["close"]) - c3["low"]
+    upper_wick = c3["high"] - max(c3["open"], c3["close"])
+    
+    # Hammer / Pin Bar
+    if rng > 0 and lower_wick >= (2.0 * body) and upper_wick < body:
+        return "Bullish Hammer / Pin Bar", True
+    elif rng > 0 and upper_wick >= (2.0 * body) and lower_wick < body:
+        return "Bearish Shooting Star", True
+    # Engulfing
+    elif c3["close"] > c3["open"] and c2["close"] < c2["open"] and c3["close"] >= c2["open"] and c3["open"] <= c2["close"]:
+        return "Bullish Engulfing", True
+    elif c3["close"] < c3["open"] and c2["close"] > c2["open"] and c3["close"] <= c2["open"] and c3["open"] >= c2["close"]:
+        return "Bearish Engulfing", True
+        
+    return "Standard Price Action Momentum", True
+
+def run_offline_institutional_backtest(api_key, access_token, instrument_token, days=30, min_rr=4.0):
+    print(f"🚀 Initializing Backend Backtester for Token {instrument_token} over past {days} days...")
+    
+    try:
+        kite = KiteConnect(api_key=api_key)
+        kite.set_access_token(access_token)
+        
+        to_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        from_dt = to_dt - datetime.timedelta(days=days)
+        
+        # Fetch historical data from Kite API
+        candles = kite.historical_data(instrument_token=instrument_token, from_date=from_dt, to_date=to_dt, interval="5minute")
+        if not candles or len(candles) < 50:
+            print("❌ Insufficient historical candles returned from API.")
+            return None
+            
+        df = pd.DataFrame(candles)
+        df.to_csv(CACHE_CSV, index=False)
+        print(f"💾 Cached {len(df)} candles locally to {CACHE_CSV}")
+        
+    except Exception as e:
+        print(f"⚠️ API Fetch failed, loading from local cache if available: {e}")
+        if os.path.exists(CACHE_CSV):
+            df = pd.read_csv(CACHE_CSV)
+        else:
+            return None
+
+    # Simulation State
+    total_setups = 0
+    wins = 0
+    losses = 0
+    trade_log = []
+    cumulative_pnl = 0.0
+    
+    target_pts = 100.0
+    risk_pts = target_pts / min_rr
+    
+    for i in range(2, len(df) - 15):
+        pattern_name, is_confirmed = detect_candlestick_patterns(df, i)
+        
+        if is_confirmed and "Consolidation" not in pattern_name:
+            total_setups += 1
+            entry_price = float(df.iloc[i]["close"])
+            target_price = entry_price + target_pts
+            stop_loss_price = entry_price - risk_pts
+            
+            # Forward simulation loop
+            trade_resolved = False
+            for j in range(i+1, min(i+15, len(df))):
+                high_p = float(df.iloc[j]["high"])
+                low_p = float(df.iloc[j]["low"])
+                
+                if low_p <= stop_loss_price:
+                    losses += 1
+                    cumulative_pnl -= (risk_pts * 25)  # assuming lot size 25
+                    trade_log.append({"Setup": total_setups, "Result": "LOSS", "P&L": -(risk_pts * 25), "Pattern": pattern_name})
+                    trade_resolved = True
+                    break
+                elif high_p >= target_price:
+                    wins += 1
+                    cumulative_pnl += (target_pts * 25)
+                    trade_log.append({"Setup": total_setups, "Result": "WIN", "P&L": (target_pts * 25), "Pattern": pattern_name})
+                    trade_resolved = True
+                    break
+
+    win_rate = round((wins / max(1, (wins + losses))) * 100, 2)
+    results = {
+        "timestamp": str(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        "total_setups": total_setups,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": win_rate,
+        "net_pnl": cumulative_pnl,
+        "trade_history": trade_log
+    }
+    
+    with open(BACKTEST_OUTPUT_FILE, "w") as f:
+        json.dump(results, f, indent=4)
+        
+    print(f"✅ Backtest Complete! Win Rate: {win_rate}% | Net P&L: ₹{cumulative_pnl:,.2f}")
+    return results
+
+if __name__ == "__main__":
+    print("Offline backtester script ready. Execute or import into main terminal.")
