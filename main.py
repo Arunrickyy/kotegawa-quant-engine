@@ -195,7 +195,7 @@ current_day_str = current_datetime.strftime("%A")
 st.markdown(f"""
     <div class="terminal-banner">
         <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v14.0 PRO)</div>
-        <div class="terminal-subtitle">Volume, Momentum & 10-Layer Institutional Confluence Vault</div>
+        <div class="terminal-subtitle">10-Layer Institutional Confluence Vault & Optimized Multi-Timeframe Stream</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
             📅 Live Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
         </div>
@@ -395,6 +395,35 @@ def log_trade_audit_trail(symbol, trade_type, entry, sl, target, audit_trail, sc
     }
     daily_state["audit_logs"].append(audit_entry)
     save_daily_state(daily_state)
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_cached_multi_timeframe_data(api_key_str, access_token_str, index_name):
+    """Safely fetches and caches multi-timeframe historical data from the index segment."""
+    if not access_token_str: return None
+    try:
+        temp_kite = KiteConnect(api_key=api_key_str)
+        temp_kite.set_access_token(access_token_str)
+        kite_index_map = {
+            "Nifty": "NSE:NIFTY 50", "BankNifty": "NSE:NIFTY BANK",
+            "FinNifty": "NSE:NIFTY FIN SERVICE", "NiftyIT": "NSE:NIFTY IT"
+        }
+        symbol_key = kite_index_map.get(index_name, "NSE:NIFTY 50")
+        inst_df = pd.DataFrame(temp_kite.instruments("NSE"))
+        matched = inst_df[inst_df["tradingsymbol"] == symbol_key.split(":")[-1]]
+        if matched.empty: return None
+        token = int(matched.iloc[0]["instrument_token"])
+        to_dt = datetime.datetime.now()
+        from_dt = to_dt - datetime.timedelta(days=3)
+        
+        return {
+            "1m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="minute"),
+            "3m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="3minute"),
+            "5m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="5minute"),
+            "15m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="15minute"),
+            "60m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="60minute")
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 def run_historical_backtest_simulation(kite, symbol_token, days, target_pts, min_rr_val):
     try:
@@ -617,44 +646,34 @@ with tab_dashboard:
         st.dataframe(df_matrix, use_container_width=True, height=275)
 
     st.markdown("---")
-    st.markdown("### ⚡ Multi-Timeframe Matrix (1m, 3m, 5m, 15m, 60m)")
-    if kite_client:
-        try:
-            inst_df = pd.DataFrame(kite_client.instruments("NFO"))
-            opt_df = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["instrument_type"].isin(["CE", "PE"]))].copy()
-            opt_df["expiry"] = pd.to_datetime(opt_df["expiry"])
-            sample_token = int(opt_df[opt_df["expiry"] == opt_df["expiry"].min()].iloc[0]["instrument_token"])
-            to_dt = datetime.datetime.now()
-            from_dt = to_dt - datetime.timedelta(days=2)
-            
-            c_1m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="minute")
-            c_3m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="3minute")
-            c_5m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="5minute")
-            c_15m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="15minute")
-            c_60m = kite_client.historical_data(instrument_token=sample_token, from_date=from_dt, to_date=to_dt, interval="60minute")
-            
-            def eval_tf(candles):
-                if not candles or len(candles) < 3: return "NEUTRAL", "#d29922"
-                df = pd.DataFrame(candles)
-                ret = df["close"].iloc[-1] - df["close"].iloc[-3]
-                return ("BULLISH", "#56d364") if ret > 0 else ("BEARISH", "#ff7b72")
+    st.markdown("### ⚡ Multi-Timeframe Matrix (1m, 3m, 5m, 15m, 60m) — Institutional Grade")
+    if kite_client and daily_state.get("access_token"):
+        with st.spinner("Streaming clean multi-timeframe index structure..."):
+            mtf_data = fetch_cached_multi_timeframe_data(api_key, daily_state["access_token"], selected_index)
+            if mtf_data and "error" not in mtf_data:
+                def eval_tf(candles):
+                    if not candles or len(candles) < 3: return "NEUTRAL", "#d29922"
+                    df = pd.DataFrame(candles)
+                    ret = df["close"].iloc[-1] - df["close"].iloc[-3]
+                    return ("BULLISH", "#56d364") if ret > 0 else ("BEARISH", "#ff7b72")
 
-            t1, c1_col = eval_tf(c_1m)
-            t3, c3_col = eval_tf(c_3m)
-            t5, c5_col = eval_tf(c_5m)
-            t15, c15_col = eval_tf(c_15m)
-            t60, c60_col = eval_tf(c_60m)
+                t1, c1_col = eval_tf(mtf_data.get("1m"))
+                t3, c3_col = eval_tf(mtf_data.get("3m"))
+                t5, c5_col = eval_tf(mtf_data.get("5m"))
+                t15, c15_col = eval_tf(mtf_data.get("15m"))
+                t60, c60_col = eval_tf(mtf_data.get("60m"))
 
-            tf_cols = st.columns(5)
-            tf_cols[0].markdown(f'<div class="metric-card"><div class="metric-label">1-Min (Scalp)</div><div class="metric-value" style="color: {c1_col}; font-size:1rem;">{t1}</div></div>', unsafe_allow_html=True)
-            tf_cols[1].markdown(f'<div class="metric-card"><div class="metric-label">3-Min (Momentum)</div><div class="metric-value" style="color: {c3_col}; font-size:1rem;">{t3}</div></div>', unsafe_allow_html=True)
-            tf_cols[2].markdown(f'<div class="metric-card"><div class="metric-label">5-Min (Retest)</div><div class="metric-value" style="color: {c5_col}; font-size:1rem;">{t5}</div></div>', unsafe_allow_html=True)
-            tf_cols[3].markdown(f'<div class="metric-card"><div class="metric-label">15-Min (Trend)</div><div class="metric-value" style="color: {c15_col}; font-size:1rem;">{t15}</div></div>', unsafe_allow_html=True)
-            tf_cols[4].markdown(f'<div class="metric-card"><div class="metric-label">60-Min (Macro)</div><div class="metric-value" style="color: {c60_col}; font-size:1rem;">{t60}</div></div>', unsafe_allow_html=True)
-        except:
-            st.info("💡 Multi-Timeframe stream standing by for active session tokens.")
+                tf_cols = st.columns(5)
+                tf_cols[0].markdown(f'<div class="metric-card"><div class="metric-label">1-Min (Scalp)</div><div class="metric-value" style="color: {c1_col}; font-size:1rem;">{t1}</div></div>', unsafe_allow_html=True)
+                tf_cols[1].markdown(f'<div class="metric-card"><div class="metric-label">3-Min (Momentum)</div><div class="metric-value" style="color: {c3_col}; font-size:1rem;">{t3}</div></div>', unsafe_allow_html=True)
+                tf_cols[2].markdown(f'<div class="metric-card"><div class="metric-label">5-Min (Retest)</div><div class="metric-value" style="color: {c5_col}; font-size:1rem;">{t5}</div></div>', unsafe_allow_html=True)
+                tf_cols[3].markdown(f'<div class="metric-card"><div class="metric-label">15-Min (Trend)</div><div class="metric-value" style="color: {c15_col}; font-size:1rem;">{t15}</div></div>', unsafe_allow_html=True)
+                tf_cols[4].markdown(f'<div class="metric-card"><div class="metric-label">60-Min (Macro)</div><div class="metric-value" style="color: {c60_col}; font-size:1rem;">{t60}</div></div>', unsafe_allow_html=True)
+            else:
+                err_msg = mtf_data.get("error", "Token mapping pending") if mtf_data else "API Handshake waiting"
+                st.warning(f"⚠️ Multi-timeframe stream syncing: {err_msg}")
     else:
-        st.info("💡 Connect Kite API to stream live multi-timeframe candle structures.")
+        st.info("💡 Connect and authorize Kite API in the sidebar to stream live multi-timeframe institutional index structures.")
 
 with tab_backtest:
     st.markdown("### 📊 Historical Data Backtesting & Anti-Overfitting Suite")
