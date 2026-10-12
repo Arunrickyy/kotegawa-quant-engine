@@ -14,7 +14,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.3 Pro",
+    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.3.1 Pro",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -202,7 +202,7 @@ current_day_str = current_datetime.strftime("%A")
 
 st.markdown(f"""
     <div class="terminal-banner">
-        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.3 PRO)</div>
+        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.3.1 PRO)</div>
         <div class="terminal-subtitle">10-Layer Institutional Vault & 1:4 Risk-Reward Multiplier Engine</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
             📅 Live IST Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
@@ -282,9 +282,8 @@ if not spot_fetched_via_kite:
 
 auto_fii = "Net Bullish (Longs)" if overall_pcr >= 1.0 else "Net Bearish (Shorts)"
 fii_sentiment = st.sidebar.selectbox("🏛️ FII Index Future Bias", ["Net Bullish (Longs)", "Net Bearish (Shorts)", "Neutral / Mixed"], index=["Net Bullish (Longs)", "Net Bearish (Shorts)", "Neutral / Mixed"].index(auto_fii))
-min_rr = st.sidebar.slider("Min Risk-Reward Ratio (Locked 1:4)", 4.0, 4.0, 4.0, 0.0) # Locked 1:4 R:R
+min_rr = st.sidebar.slider("Min Risk-Reward Ratio", 1.0, 5.0, 4.0, 0.5)
 sl_pct = st.sidebar.slider("Stop Loss Drop (%)", 10.0, 40.0, 25.0, 5.0) / 100.0
-target_multiplier = 4.0 # 1:4 R:R Multiplier
 
 st.sidebar.markdown("---")
 st.sidebar.header("🤖 Automation & Runner Controls")
@@ -338,7 +337,7 @@ def calculate_sniper_parameters(ltp, sl_drop_pct):
     entry = round(cp * 0.98, 2)
     sl = round(entry * (1.0 - sl_drop_pct), 2)
     risk_pts = entry - sl
-    target = round(entry + (risk_pts * 4.0), 2)  # Strictly 1:4 R:R Multiplier
+    target = round(entry + (risk_pts * min_rr), 2)  # Strictly Dynamic R:R Multiplier
     return entry, sl, target
 
 # --- INSTITUTIONAL SAFEGUARDS & BIDIRECTIONAL 10-LAYER ENGINE ---
@@ -463,13 +462,13 @@ def process_behavioral_learning(ledger_list):
     win_ratio = len(wins) / len(completed_trades)
 
     if win_ratio < 0.4:
-        st.session_state.market_behavior_memory["adaptive_rr_bias"] = 4.0
-        st.session_state.market_behavior_memory["learned_insight"] = "⚠️ Low win rate detected. 1:4 R:R asymmetry locked to ensure robust net profitability per win."
+        st.session_state.market_behavior_memory["adaptive_rr_bias"] = min_rr
+        st.session_state.market_behavior_memory["learned_insight"] = "⚠️ Low win rate detected. R:R asymmetry locked to ensure robust net profitability per win."
     elif win_ratio >= 0.7:
-        st.session_state.market_behavior_memory["adaptive_rr_bias"] = 4.0
-        st.session_state.market_behavior_memory["learned_insight"] = "🔥 High success rate observed with 1:4 R:R institutional multiplier."
+        st.session_state.market_behavior_memory["adaptive_rr_bias"] = min_rr
+        st.session_state.market_behavior_memory["learned_insight"] = "🔥 High success rate observed with institutional R:R multiplier."
     else:
-        st.session_state.market_behavior_memory["learned_insight"] = "🟢 System operating within stable 1:4 institutional R:R distribution bands."
+        st.session_state.market_behavior_memory["learned_insight"] = "🟢 System operating within stable institutional R:R distribution bands."
     return st.session_state.market_behavior_memory
 
 # --- TOP METRICS BAR ---
@@ -507,7 +506,7 @@ with tab_dashboard:
     
     st.markdown(f"""
         <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid #58a6ff; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-            <div style="color: #58a6ff; font-size: 1.1rem; font-weight: 800;">🧠 AI Behavioral Learning & 1:4 R:R Co-Pilot</div>
+            <div style="color: #58a6ff; font-size: 1.1rem; font-weight: 800;">🧠 AI Behavioral Learning & R:R Co-Pilot</div>
             <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 5px;">{ai_memory['learned_insight']}</div>
         </div>
     """, unsafe_allow_html=True)
@@ -524,7 +523,7 @@ with tab_dashboard:
             <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 8px;">
                 • <b>Structure Status:</b> {"Volume breakout confirmed" if overall_pcr >= 1.0 else "Support failure breakdown"} at ₹{breakout_level:,.1f}<br>
                 • <b>Exact Retest Entry Point:</b> <span style="color: #58a6ff; font-weight: bold;">₹{pattern_entry_price:,.1f}</span><br>
-                • <b>Target Multiplier:</b> 1:4 R:R Ratio | <b>Trailing Runner Mode:</b> {"Active 🚀" if runner_mode else "Disabled"}
+                • <b>Target Ratio:</b> 1:{min_rr} R:R | <b>Trailing Runner Mode:</b> {"Active 🚀" if runner_mode else "Disabled"}
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -572,7 +571,7 @@ with tab_dashboard:
                         <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid {border_color}; padding: 22px; border-radius: 10px; margin-bottom: 20px;">
                             <div style="color: {border_color}; font-size: 1.25rem; font-weight: 800;">🔥 10-LAYER {chosen_type} VAULT STATUS: {sym} — {engine_status}</div>
                             <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 8px;">
-                                • <b>Retest Entry Limit:</b> ₹{snip_entry} &nbsp;|&nbsp; <b>Stop Loss Shield:</b> ₹{snip_sl} &nbsp;|&nbsp; <b>Target (1:4 R:R):</b> <span style="color: #56d364; font-weight: bold;">₹{snip_tgt}</span>
+                                • <b>Retest Entry Limit:</b> ₹{snip_entry} &nbsp;|&nbsp; <b>Stop Loss Shield:</b> ₹{snip_sl} &nbsp;|&nbsp; <b>Target (1:{min_rr} R:R):</b> <span style="color: #56d364; font-weight: bold;">₹{snip_tgt}</span>
                             </div>
                         </div>
                     """, unsafe_allow_html=True)
@@ -662,13 +661,13 @@ with tab_dashboard:
             "Solved IV (%)": iv_list, "Delta": deltas, "Theta": thetas,
             "Gamma": gammas, "Vega": vegas,
             "Stop Loss (₹)": matrix_sls,
-            "Target (1:4 R:R)": matrix_tgts
+            f"Target (1:{min_rr} R:R)": matrix_tgts
         })
-        df_matrix["R:R Ratio"] = 4.0
+        df_matrix["R:R Ratio"] = min_rr
 
         def advanced_cross_check(row):
             is_iv_safe = row["Solved IV (%)"] < 45.0 
-            if is_iv_safe: return "✅ APPROVED (1:4 R:R Vault)"
+            if is_iv_safe: return f"✅ APPROVED (1:{min_rr} R:R Vault)"
             return "❌ REJECTED (High IV)"
 
         df_matrix["Execution Verdict"] = df_matrix.apply(advanced_cross_check, axis=1)
@@ -711,10 +710,10 @@ with tab_dashboard:
         st.info("💡 Connect and authorize Kite API in the sidebar to stream live multi-timeframe institutional index structures.")
 
 with tab_backtest:
-    st.markdown("### 📊 Historical Data Backtesting & 1:4 R:R Suite")
+    st.markdown(f"### 📊 Historical Data Backtesting & 1:{min_rr} R:R Suite")
     b_col_in1, b_col_in2, b_col_in3 = st.columns(3)
     with b_col_in1: bt_days = st.slider("Historical Lookback Window (Days)", 5, 60, 30, key="bt_days_slider")
-    with b_col_in2: bt_target = st.slider("Target Profit Points (1:4 R:R)", 40, 200, 100, key="bt_target_slider")
+    with b_col_in2: bt_target = st.slider(f"Target Profit Points (1:{min_rr} R:R)", 40, 200, 100, key="bt_target_slider")
     with b_col_in3: bt_sl = st.slider("Stop Loss Drop (%)", 10.0, 40.0, 25.0, 5.0, key="bt_sl_slider")
 
     if st.button("Run Kite Historical Backtest Simulation", type="primary"):
@@ -725,12 +724,12 @@ with tab_backtest:
                     opt_df = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["instrument_type"] == "CE")].copy()
                     opt_df["expiry"] = pd.to_datetime(opt_df["expiry"])
                     sample_token = int(opt_df[opt_df["expiry"] == opt_df["expiry"].min()].iloc[0]["instrument_token"])
-                    res = run_historical_backtest_simulation(kite_client, sample_token, bt_days, bt_target, 4.0)
+                    res = run_historical_backtest_simulation(kite_client, sample_token, bt_days, bt_target, min_rr)
                     
                     st.success("Backtest Simulation Complete!")
                     res1, res2, res3 = st.columns(3)
                     res1.metric("Simulated Sample Size", f"{res['setups']} Setups")
-                    res2.metric("Historical Win Rate", f"{res['win_rate']}%", delta="Robust (1:4 R:R)")
+                    res2.metric("Historical Win Rate", f"{res['win_rate']}%", delta=f"Robust (1:{min_rr} R:R)")
                     res3.metric("Net Expectancy Score", f"+{res['expectancy']:,.1f} pts")
                 except Exception as ex:
                     st.error(f"Backtest error: {ex}")
@@ -764,7 +763,7 @@ with tab_sr_fib:
         st.dataframe(pd.DataFrame(list(fib_levels.items()), columns=["Level", "Price (₹)"]), use_container_width=True, hide_index=True)
 
 with tab_strategy:
-    st.markdown("### 🧬 Multi-Leg Strategy Builder: 1:4 R:R Spreads")
+    st.markdown(f"### 🧬 Multi-Leg Strategy Builder: 1:{min_rr} R:R Spreads")
     sc1, sc2, sc3 = st.columns(3)
     with sc1: spread_atm = st.selectbox("Leg 1: Strike 1", [spot_price - 100, spot_price, spot_price + 100], index=1)
     with sc2: spread_otm = st.selectbox("Leg 2: Strike 2", [spot_price, spot_price + 100, spot_price + 200], index=2)
@@ -774,20 +773,20 @@ with tab_strategy:
         strike_width = spread_otm - spread_atm
         net_debit = 75.0
         max_risk_amt = (net_debit * lot_size * spread_lots) + 40.0 
-        max_rew_amt = max_risk_amt * 4.0 # 1:4 R:R Target
+        max_rew_amt = max_risk_amt * min_rr
         
         st.markdown(f"""
             <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid #56d364; padding: 18px; border-radius: 8px;">
-                <div style="color: #58a6ff; font-weight: 700; margin-bottom: 8px;">📊 1:4 Spread Risk & P&L Breakdown (Post ₹40 Cost)</div>
-                • <b>Max Risk Capital:</b> <span style="color: #ff7b72;">₹{max_risk_amt:,.0f}</span> &nbsp;|&nbsp; <b>Max Potential Reward (1:4):</b> <span style="color: #56d364;">₹{max_rew_amt:,.0f}</span><br>
-                • <b>Risk-to-Reward Ratio:</b> <b>1:4.0</b> &nbsp;|&nbsp; <b>Breakeven:</b> ₹{spread_atm + net_debit:,.1f}
+                <div style="color: #58a6ff; font-weight: 700; margin-bottom: 8px;">📊 Spread Risk & P&L Breakdown (Post ₹40 Cost)</div>
+                • <b>Max Risk Capital:</b> <span style="color: #ff7b72;">₹{max_risk_amt:,.0f}</span> &nbsp;|&nbsp; <b>Max Potential Reward (1:{min_rr}):</b> <span style="color: #56d364;">₹{max_rew_amt:,.0f}</span><br>
+                • <b>Risk-to-Reward Ratio:</b> <b>1:{min_rr}</b> &nbsp;|&nbsp; <b>Breakeven:</b> ₹{spread_atm + net_debit:,.1f}
             </div>
         """, unsafe_allow_html=True)
     else:
         st.warning("⚠️ Invalid spread leg strike width configuration.")
 
 with tab_ledger:
-    st.markdown("### 📝 Live Paper Trading Ledger & 1:4 R:R Audit Trail")
+    st.markdown(f"### 📝 Live Paper Trading Ledger & 1:{min_rr} R:R Audit Trail")
     
     if st.session_state.paper_ledger:
         ledger_rows = []
@@ -808,7 +807,7 @@ with tab_ledger:
                 item["Status"] = trade_status
 
             if current_market_ltp >= item["Target"]:
-                trade_status = "🎯 TARGET 1 ACHIEVED (1:4 R:R)"
+                trade_status = f"🎯 TARGET 1 ACHIEVED (1:{min_rr} R:R)"
                 item["Status"] = trade_status
             elif current_market_ltp <= item["Stop Loss"]:
                 trade_status = "🛑 STOP LOSS HIT"
@@ -825,7 +824,7 @@ with tab_ledger:
             ledger_rows.append({
                 "Timestamp": item["Timestamp"], "Symbol": item["Symbol"], "Type": item["Type"],
                 "Entry (₹)": item["Entry Limit"], "Live LTP (₹)": current_market_ltp,
-                "Target (1:4)": item["Target"], "Net P&L (₹)": f"₹{pnl:,.2f}", "Status": trade_status
+                f"Target (1:{min_rr})": item["Target"], "Net P&L (₹)": f"₹{pnl:,.2f}", "Status": trade_status
             })
 
         total_trades = wins + losses
