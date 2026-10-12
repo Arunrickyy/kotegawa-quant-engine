@@ -14,7 +14,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.1 Pro",
+    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.2 Pro",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -37,12 +37,16 @@ def get_today_str():
     return str(datetime.date.today())
 
 def load_daily_state():
-    """Reads active daily session state and paper ledger from disk."""
+    """Reads active daily session state and paper ledger from disk with schema fallback."""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
                 data = json.load(f)
                 if data.get("date") == get_today_str():
+                    if "paper_ledger" not in data:
+                        data["paper_ledger"] = []
+                    if "audit_logs" not in data:
+                        data["audit_logs"] = []
                     return data
         except Exception:
             pass
@@ -59,6 +63,10 @@ def load_daily_state():
 def save_daily_state(state):
     """Saves updated engine state to disk for multi-device sync."""
     state["date"] = get_today_str()
+    if "paper_ledger" not in state:
+        state["paper_ledger"] = []
+    if "audit_logs" not in state:
+        state["audit_logs"] = []
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=4)
 
@@ -194,7 +202,7 @@ current_day_str = current_datetime.strftime("%A")
 
 st.markdown(f"""
     <div class="terminal-banner">
-        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.1 PRO)</div>
+        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.2 PRO)</div>
         <div class="terminal-subtitle">10-Layer Institutional Vault & Real-Time Bidirectional MTF Stream</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
             📅 Live IST Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
@@ -407,6 +415,8 @@ def log_trade_audit_trail(symbol, trade_type, entry, sl, target, audit_trail, sc
         "Symbol": symbol, "Type": trade_type, "Entry": entry, "StopLoss": sl,
         "Target": target, "ConfluenceScore": f"{score * 100:.1f}%", "Checklist": audit_trail
     }
+    if "audit_logs" not in daily_state:
+        daily_state["audit_logs"] = []
     daily_state["audit_logs"].append(audit_entry)
     save_daily_state(daily_state)
 
@@ -587,11 +597,11 @@ with tab_dashboard:
                             daily_state["paper_ledger"] = st.session_state.paper_ledger
                             
                             log_trade_audit_trail(sym, chosen_type, snip_entry, snip_sl, snip_tgt, audit_trail, score)
-                            st.session_state.audit_logs = daily_state["audit_logs"] # Instant UI Sync
+                            st.session_state.audit_logs = daily_state.get("audit_logs", [])
                             
                             save_daily_state(daily_state)
                             st.toast(f"🤖 AI Auto-Captured {chosen_type} Sniper Setup: {sym} added!")
-                            st.rerun() # Forces immediate reload so audit log shows up instantly
+                            st.rerun()
 
                     if is_approved and st.button(f"🚀 Manually Dispatch {chosen_type} Setup & Audit Trail"):
                         ist_time_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime("%H:%M:%S")
@@ -604,7 +614,7 @@ with tab_dashboard:
                         daily_state["paper_ledger"] = st.session_state.paper_ledger
                         
                         log_trade_audit_trail(sym, chosen_type, snip_entry, snip_sl, snip_tgt, audit_trail, score)
-                        st.session_state.audit_logs = daily_state["audit_logs"] # Instant UI Sync
+                        st.session_state.audit_logs = daily_state.get("audit_logs", [])
                         
                         save_daily_state(daily_state)
                         st.success(f"✅ Setup {sym} dispatched & audit snapshot recorded!")
