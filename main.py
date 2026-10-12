@@ -14,7 +14,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.3.1 Pro",
+    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.4 Pro",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -93,7 +93,7 @@ if "market_behavior_memory" not in st.session_state:
         "total_sessions_observed": 1,
         "optimal_win_hour": "09:30 - 11:00 AM",
         "adaptive_rr_bias": 4.0,
-        "learned_insight": "Awaiting initial forward-test data to calibrate 1:4 R:R behavioral weights."
+        "learned_insight": "Awaiting initial forward-test data to calibrate bidirectional 1:4 R:R weights."
     }
 
 # --- CUSTOM CSS FOR HIGH-CONTRAST TERMINAL ---
@@ -202,8 +202,8 @@ current_day_str = current_datetime.strftime("%A")
 
 st.markdown(f"""
     <div class="terminal-banner">
-        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.3.1 PRO)</div>
-        <div class="terminal-subtitle">10-Layer Institutional Vault & 1:4 Risk-Reward Multiplier Engine</div>
+        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.4 PRO)</div>
+        <div class="terminal-subtitle">10-Layer Institutional Vault & Fully Bidirectional CE/PE Engine</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
             📅 Live IST Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
         </div>
@@ -337,8 +337,64 @@ def calculate_sniper_parameters(ltp, sl_drop_pct):
     entry = round(cp * 0.98, 2)
     sl = round(entry * (1.0 - sl_drop_pct), 2)
     risk_pts = entry - sl
-    target = round(entry + (risk_pts * min_rr), 2)  # Strictly Dynamic R:R Multiplier
+    target = round(entry + (risk_pts * min_rr), 2)
     return entry, sl, target
+
+# --- REAL-TIME LIVE MULTI-TIMEFRAME STREAMING FETCHER ---
+def fetch_realtime_multi_timeframe_data(api_key_str, access_token_str, index_name):
+    if not access_token_str: return None
+    try:
+        temp_kite = KiteConnect(api_key=api_key_str)
+        temp_kite.set_access_token(access_token_str)
+        kite_index_map = {
+            "Nifty": "NSE:NIFTY 50", "BankNifty": "NSE:NIFTY BANK",
+            "FinNifty": "NSE:NIFTY FIN SERVICE", "NiftyIT": "NSE:NIFTY IT"
+        }
+        symbol_key = kite_index_map.get(index_name, "NSE:NIFTY 50")
+        inst_df = pd.DataFrame(temp_kite.instruments("NSE"))
+        matched = inst_df[inst_df["tradingsymbol"] == symbol_key.split(":")[-1]]
+        if matched.empty: return None
+        token = int(matched.iloc[0]["instrument_token"])
+        to_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        from_dt = to_dt - datetime.timedelta(days=2)
+        
+        return {
+            "1m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="minute"),
+            "3m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="3minute"),
+            "5m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="5minute"),
+            "15m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="15minute"),
+            "60m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="60minute")
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+def determine_dynamic_trade_bias(mtf_data, pcr_val, fii_bias):
+    """Dynamically determines whether the engine should target CE (Bullish) or PE (Bearish) based on live momentum."""
+    if not mtf_data or "error" in mtf_data:
+        return "CE" if pcr_val >= 1.0 else "PE"
+    
+    bullish_votes = 0
+    bearish_votes = 0
+    
+    for tf_key in ["1m", "3m", "5m", "15m", "60m"]:
+        candles = mtf_data.get(tf_key)
+        if candles and len(candles) >= 3:
+            df = pd.DataFrame(candles)
+            price_diff = df["close"].iloc[-1] - df["close"].iloc[-3]
+            if price_diff > 0: bullish_votes += 1
+            else: bearish_votes += 1
+
+    if fii_bias == "Net Bearish (Shorts)" and bearish_votes >= 2:
+        return "PE"
+    elif fii_bias == "Net Bullish (Longs)" and bullish_votes >= 2:
+        return "CE"
+    
+    if bearish_votes > bullish_votes:
+        return "PE"
+    elif bullish_votes > bearish_votes:
+        return "CE"
+    
+    return "CE" if pcr_val >= 1.0 else "PE"
 
 # --- INSTITUTIONAL SAFEGUARDS & BIDIRECTIONAL 10-LAYER ENGINE ---
 def check_economic_calendar_blackout(current_time_ist):
@@ -374,11 +430,11 @@ def evaluate_intelligent_10_layer_matrix(market_data, trade_type="CE"):
     if trade_type == "CE":
         macro_ok = pcr >= 0.95
         vwap_ok = market_data.get("above_vwap", True)
-        pcr_ok = pcr >= 1.0
+        pcr_ok = pcr >= 0.98
     else: 
         macro_ok = pcr <= 1.05
         vwap_ok = not market_data.get("above_vwap", True)
-        pcr_ok = pcr < 1.0
+        pcr_ok = pcr < 1.05
 
     layers_status = {
         "Layer 2 (Macro Trend)": macro_ok,
@@ -413,34 +469,6 @@ def log_trade_audit_trail(symbol, trade_type, entry, sl, target, audit_trail, sc
     daily_state["audit_logs"].append(audit_entry)
     save_daily_state(daily_state)
 
-# --- REAL-TIME LIVE MULTI-TIMEFRAME STREAMING FETCHER ---
-def fetch_realtime_multi_timeframe_data(api_key_str, access_token_str, index_name):
-    if not access_token_str: return None
-    try:
-        temp_kite = KiteConnect(api_key=api_key_str)
-        temp_kite.set_access_token(access_token_str)
-        kite_index_map = {
-            "Nifty": "NSE:NIFTY 50", "BankNifty": "NSE:NIFTY BANK",
-            "FinNifty": "NSE:NIFTY FIN SERVICE", "NiftyIT": "NSE:NIFTY IT"
-        }
-        symbol_key = kite_index_map.get(index_name, "NSE:NIFTY 50")
-        inst_df = pd.DataFrame(temp_kite.instruments("NSE"))
-        matched = inst_df[inst_df["tradingsymbol"] == symbol_key.split(":")[-1]]
-        if matched.empty: return None
-        token = int(matched.iloc[0]["instrument_token"])
-        to_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
-        from_dt = to_dt - datetime.timedelta(days=2)
-        
-        return {
-            "1m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="minute"),
-            "3m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="3minute"),
-            "5m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="5minute"),
-            "15m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="15minute"),
-            "60m": temp_kite.historical_data(instrument_token=token, from_date=from_dt, to_date=to_dt, interval="60minute")
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
 def run_historical_backtest_simulation(kite, symbol_token, days, target_pts, min_rr_val):
     try:
         to_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
@@ -463,12 +491,12 @@ def process_behavioral_learning(ledger_list):
 
     if win_ratio < 0.4:
         st.session_state.market_behavior_memory["adaptive_rr_bias"] = min_rr
-        st.session_state.market_behavior_memory["learned_insight"] = "⚠️ Low win rate detected. R:R asymmetry locked to ensure robust net profitability per win."
+        st.session_state.market_behavior_memory["learned_insight"] = "⚠️ Low win rate detected. Bidirectional R:R asymmetry locked."
     elif win_ratio >= 0.7:
         st.session_state.market_behavior_memory["adaptive_rr_bias"] = min_rr
-        st.session_state.market_behavior_memory["learned_insight"] = "🔥 High success rate observed with institutional R:R multiplier."
+        st.session_state.market_behavior_memory["learned_insight"] = "🔥 High success rate observed with bidirectional institutional multiplier."
     else:
-        st.session_state.market_behavior_memory["learned_insight"] = "🟢 System operating within stable institutional R:R distribution bands."
+        st.session_state.market_behavior_memory["learned_insight"] = "🟢 System operating within stable bidirectional institutional bands."
     return st.session_state.market_behavior_memory
 
 # --- TOP METRICS BAR ---
@@ -506,24 +534,31 @@ with tab_dashboard:
     
     st.markdown(f"""
         <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid #58a6ff; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
-            <div style="color: #58a6ff; font-size: 1.1rem; font-weight: 800;">🧠 AI Behavioral Learning & R:R Co-Pilot</div>
+            <div style="color: #58a6ff; font-size: 1.1rem; font-weight: 800;">🧠 AI Behavioral Learning & Bidirectional Co-Pilot</div>
             <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 5px;">{ai_memory['learned_insight']}</div>
         </div>
     """, unsafe_allow_html=True)
 
+    # Fetch live MTF data early for dynamic bias calculation
+    mtf_data_cache = None
+    if kite_client and daily_state.get("access_token"):
+        mtf_data_cache = fetch_realtime_multi_timeframe_data(api_key, daily_state["access_token"], selected_index)
+
+    active_trade_type = determine_dynamic_trade_bias(mtf_data_cache, overall_pcr, fii_sentiment)
+    bias_color = "#56d364" if active_trade_type == "CE" else "#ff7b72"
+
     st.markdown("### 📊 Real-Time Chart Pattern & Breakout Indicator")
-    detected_pattern = "Opening Range Breakout (ORB) & Volume Expansion" if overall_pcr >= 1.0 else "Bear Flag Breakdown & Support Failure"
-    pattern_color = "#56d364" if overall_pcr >= 1.0 else "#ff7b72"
-    breakout_level = round(spot_price * (1.002 if overall_pcr >= 1.0 else 0.998), 2)
-    pattern_entry_price = round(breakout_level * 0.985, 2)
+    detected_pattern = "Opening Range Breakout (ORB) & Volume Expansion" if active_trade_type == "CE" else "Bear Flag Breakdown & Support Failure"
+    breakout_level = round(spot_price * (1.002 if active_trade_type == "CE" else 0.998), 2)
+    pattern_entry_price = round(breakout_level * (0.985 if active_trade_type == "CE" else 1.015), 2)
 
     st.markdown(f"""
-        <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid {pattern_color}; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
-            <div style="color: {pattern_color}; font-size: 1.2rem; font-weight: 800;">🔍 Active Pattern Detected: {detected_pattern}</div>
+        <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid {bias_color}; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+            <div style="color: {bias_color}; font-size: 1.2rem; font-weight: 800;">🔍 Active Pattern Detected: {detected_pattern} ({active_trade_type} Mode)</div>
             <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 8px;">
-                • <b>Structure Status:</b> {"Volume breakout confirmed" if overall_pcr >= 1.0 else "Support failure breakdown"} at ₹{breakout_level:,.1f}<br>
+                • <b>Structure Status:</b> {"Volume breakout confirmed" if active_trade_type == "CE" else "Support failure breakdown"} at ₹{breakout_level:,.1f}<br>
                 • <b>Exact Retest Entry Point:</b> <span style="color: #58a6ff; font-weight: bold;">₹{pattern_entry_price:,.1f}</span><br>
-                • <b>Target Ratio:</b> 1:{min_rr} R:R | <b>Trailing Runner Mode:</b> {"Active 🚀" if runner_mode else "Disabled"}
+                • <b>Target Ratio:</b> 1:{min_rr} R:R | <b>Active Bias:</b> <span style="color: {bias_color}; font-weight: bold;">{active_trade_type}</span>
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -533,7 +568,7 @@ with tab_dashboard:
     if kite_client:
         try:
             inst_df = pd.DataFrame(kite_client.instruments("NFO"))
-            opt_df = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["instrument_type"].isin(["CE", "PE"]))].copy()
+            opt_df = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["instrument_type"] == active_trade_type)].copy()
             opt_df["expiry"] = pd.to_datetime(opt_df["expiry"])
             nearest_expiry = opt_df["expiry"].min()
             current_chain = opt_df[opt_df["expiry"] == nearest_expiry]
@@ -541,8 +576,7 @@ with tab_dashboard:
             strike_diff = 50 if selected_index in ["Nifty", "FinNifty"] else 100
             atm = round(spot_price / strike_diff) * strike_diff
             
-            chosen_type = "CE" if overall_pcr >= 1.0 else "PE"
-            sniper_row = current_chain[(current_chain["strike"] == atm) & (current_chain["instrument_type"] == chosen_type)]
+            sniper_row = current_chain[(current_chain["strike"] == atm) & (current_chain["instrument_type"] == active_trade_type)]
             
             if not sniper_row.empty:
                 sym = sniper_row.iloc[0]["tradingsymbol"]
@@ -561,7 +595,7 @@ with tab_dashboard:
                         "runway_ok": True, "greeks_ok": True, "sector_harmony_ok": True
                     }
                     
-                    score, audit_trail, engine_status = evaluate_intelligent_10_layer_matrix(mock_market_data, chosen_type)
+                    score, audit_trail, engine_status = evaluate_intelligent_10_layer_matrix(mock_market_data, active_trade_type)
                     snip_entry, snip_sl, snip_tgt = calculate_sniper_parameters(sniper_ltp, sl_pct)
                     
                     is_approved = score >= 0.85
@@ -569,7 +603,7 @@ with tab_dashboard:
                     
                     st.markdown(f"""
                         <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid {border_color}; padding: 22px; border-radius: 10px; margin-bottom: 20px;">
-                            <div style="color: {border_color}; font-size: 1.25rem; font-weight: 800;">🔥 10-LAYER {chosen_type} VAULT STATUS: {sym} — {engine_status}</div>
+                            <div style="color: {border_color}; font-size: 1.25rem; font-weight: 800;">🔥 10-LAYER {active_trade_type} VAULT STATUS: {sym} — {engine_status}</div>
                             <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 8px;">
                                 • <b>Retest Entry Limit:</b> ₹{snip_entry} &nbsp;|&nbsp; <b>Stop Loss Shield:</b> ₹{snip_sl} &nbsp;|&nbsp; <b>Target (1:{min_rr} R:R):</b> <span style="color: #56d364; font-weight: bold;">₹{snip_tgt}</span>
                             </div>
@@ -582,30 +616,30 @@ with tab_dashboard:
                             ist_time_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime("%H:%M:%S")
                             new_entry = {
                                 "Timestamp": ist_time_str,
-                                "Symbol": sym, "Type": chosen_type, "Entry Limit": snip_entry,
+                                "Symbol": sym, "Type": active_trade_type, "Entry Limit": snip_entry,
                                 "Current LTP": sniper_ltp, "Stop Loss": snip_sl, "Original SL": snip_sl, "Target": snip_tgt, "Status": "⏳ WAITING FOR RETEST"
                             }
                             st.session_state.paper_ledger.append(new_entry)
                             daily_state["paper_ledger"] = st.session_state.paper_ledger
                             
-                            log_trade_audit_trail(sym, chosen_type, snip_entry, snip_sl, snip_tgt, audit_trail, score)
+                            log_trade_audit_trail(sym, active_trade_type, snip_entry, snip_sl, snip_tgt, audit_trail, score)
                             st.session_state.audit_logs = daily_state.get("audit_logs", [])
                             
                             save_daily_state(daily_state)
-                            st.toast(f"🤖 AI Auto-Captured {chosen_type} Sniper Setup: {sym} added!")
+                            st.toast(f"🤖 AI Auto-Captured {active_trade_type} Sniper Setup: {sym} added!")
                             st.rerun()
 
-                    if is_approved and st.button(f"🚀 Manually Dispatch {chosen_type} Setup & Audit Trail"):
+                    if is_approved and st.button(f"🚀 Manually Dispatch {active_trade_type} Setup & Audit Trail"):
                         ist_time_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime("%H:%M:%S")
                         new_entry = {
                             "Timestamp": ist_time_str,
-                            "Symbol": sym, "Type": chosen_type, "Entry Limit": snip_entry,
+                            "Symbol": sym, "Type": active_trade_type, "Entry Limit": snip_entry,
                             "Current LTP": sniper_ltp, "Stop Loss": snip_sl, "Original SL": snip_sl, "Target": snip_tgt, "Status": "⏳ WAITING FOR RETEST"
                         }
                         st.session_state.paper_ledger.append(new_entry)
                         daily_state["paper_ledger"] = st.session_state.paper_ledger
                         
-                        log_trade_audit_trail(sym, chosen_type, snip_entry, snip_sl, snip_tgt, audit_trail, score)
+                        log_trade_audit_trail(sym, active_trade_type, snip_entry, snip_sl, snip_tgt, audit_trail, score)
                         st.session_state.audit_logs = daily_state.get("audit_logs", [])
                         
                         save_daily_state(daily_state)
@@ -626,7 +660,7 @@ with tab_dashboard:
         interval = 50 if selected_index in ["Nifty", "FinNifty"] else 100
         atm = round(spot_price / interval) * interval
         strikes = [atm - 200, atm - 100, atm, atm + 100, atm + 200]
-        types = ["CE", "CE", "CE", "PE", "PE"]
+        types = [active_trade_type]*5
         ltp_vals = [210.0, 150.0, 110.0, 95.0, 140.0]
         
         if kite_client:
@@ -675,37 +709,29 @@ with tab_dashboard:
         st.dataframe(df_matrix, use_container_width=True, height=275)
 
     st.markdown("---")
-    st.markdown(f"### ⚡ Real-Time Multi-Timeframe Matrix (1m, 3m, 5m, 15m, 60m) — Bidirectional Mode ({'CE' if overall_pcr >= 1.0 else 'PE'})")
-    if kite_client and daily_state.get("access_token"):
-        with st.spinner("Streaming real-time multi-timeframe index candles..."):
-            mtf_data = fetch_realtime_multi_timeframe_data(api_key, daily_state["access_token"], selected_index)
-            if mtf_data and "error" not in mtf_data:
-                active_trade_type = "CE" if overall_pcr >= 1.0 else "PE"
-                
-                def eval_tf_bidirectional(candles, t_type):
-                    if not candles or len(candles) < 3: return "NEUTRAL", "#d29922"
-                    df = pd.DataFrame(candles)
-                    ret = df["close"].iloc[-1] - df["close"].iloc[-3]
-                    if t_type == "CE":
-                        return ("BULLISH", "#56d364") if ret > 0 else ("BEARISH", "#ff7b72")
-                    else: 
-                        return ("BEARISH (Favorable)", "#56d364") if ret < 0 else ("BULLISH (Against PE)", "#ff7b72")
+    st.markdown(f"### ⚡ Real-Time Multi-Timeframe Matrix (1m, 3m, 5m, 15m, 60m) — Bidirectional Mode ({active_trade_type})")
+    if mtf_data_cache and "error" not in mtf_data_cache:
+        def eval_tf_bidirectional(candles, t_type):
+            if not candles or len(candles) < 3: return "NEUTRAL", "#d29922"
+            df = pd.DataFrame(candles)
+            ret = df["close"].iloc[-1] - df["close"].iloc[-3]
+            if t_type == "CE":
+                return ("BULLISH", "#56d364") if ret > 0 else ("BEARISH", "#ff7b72")
+            else: 
+                return ("BEARISH (Favorable)", "#56d364") if ret < 0 else ("BULLISH (Against PE)", "#ff7b72")
 
-                t1, c1_col = eval_tf_bidirectional(mtf_data.get("1m"), active_trade_type)
-                t3, c3_col = eval_tf_bidirectional(mtf_data.get("3m"), active_trade_type)
-                t5, c5_col = eval_tf_bidirectional(mtf_data.get("5m"), active_trade_type)
-                t15, c15_col = eval_tf_bidirectional(mtf_data.get("15m"), active_trade_type)
-                t60, c60_col = eval_tf_bidirectional(mtf_data.get("60m"), active_trade_type)
+        t1, c1_col = eval_tf_bidirectional(mtf_data_cache.get("1m"), active_trade_type)
+        t3, c3_col = eval_tf_bidirectional(mtf_data_cache.get("3m"), active_trade_type)
+        t5, c5_col = eval_tf_bidirectional(mtf_data_cache.get("5m"), active_trade_type)
+        t15, c15_col = eval_tf_bidirectional(mtf_data_cache.get("15m"), active_trade_type)
+        t60, c60_col = eval_tf_bidirectional(mtf_data_cache.get("60m"), active_trade_type)
 
-                tf_cols = st.columns(5)
-                tf_cols[0].markdown(f'<div class="metric-card"><div class="metric-label">1-Min (Scalp)</div><div class="metric-value" style="color: {c1_col}; font-size:1rem;">{t1}</div></div>', unsafe_allow_html=True)
-                tf_cols[1].markdown(f'<div class="metric-card"><div class="metric-label">3-Min (Momentum)</div><div class="metric-value" style="color: {c3_col}; font-size:1rem;">{t3}</div></div>', unsafe_allow_html=True)
-                tf_cols[2].markdown(f'<div class="metric-card"><div class="metric-label">5-Min (Retest)</div><div class="metric-value" style="color: {c5_col}; font-size:1rem;">{t5}</div></div>', unsafe_allow_html=True)
-                tf_cols[3].markdown(f'<div class="metric-card"><div class="metric-label">15-Min (Trend)</div><div class="metric-value" style="color: {c15_col}; font-size:1rem;">{t15}</div></div>', unsafe_allow_html=True)
-                tf_cols[4].markdown(f'<div class="metric-card"><div class="metric-label">60-Min (Macro)</div><div class="metric-value" style="color: {c60_col}; font-size:1rem;">{t60}</div></div>', unsafe_allow_html=True)
-            else:
-                err_msg = mtf_data.get("error", "Token mapping pending") if mtf_data else "API Handshake waiting"
-                st.warning(f"⚠️ Real-time Multi-Timeframe stream syncing: {err_msg}")
+        tf_cols = st.columns(5)
+        tf_cols[0].markdown(f'<div class="metric-card"><div class="metric-label">1-Min (Scalp)</div><div class="metric-value" style="color: {c1_col}; font-size:1rem;">{t1}</div></div>', unsafe_allow_html=True)
+        tf_cols[1].markdown(f'<div class="metric-card"><div class="metric-label">3-Min (Momentum)</div><div class="metric-value" style="color: {c3_col}; font-size:1rem;">{t3}</div></div>', unsafe_allow_html=True)
+        tf_cols[2].markdown(f'<div class="metric-card"><div class="metric-label">5-Min (Retest)</div><div class="metric-value" style="color: {c5_col}; font-size:1rem;">{t5}</div></div>', unsafe_allow_html=True)
+        tf_cols[3].markdown(f'<div class="metric-card"><div class="metric-label">15-Min (Trend)</div><div class="metric-value" style="color: {c15_col}; font-size:1rem;">{t15}</div></div>', unsafe_allow_html=True)
+        tf_cols[4].markdown(f'<div class="metric-card"><div class="metric-label">60-Min (Macro)</div><div class="metric-value" style="color: {c60_col}; font-size:1rem;">{t60}</div></div>', unsafe_allow_html=True)
     else:
         st.info("💡 Connect and authorize Kite API in the sidebar to stream live multi-timeframe institutional index structures.")
 
@@ -721,7 +747,7 @@ with tab_backtest:
             if kite_client:
                 try:
                     inst_df = pd.DataFrame(kite_client.instruments("NFO"))
-                    opt_df = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["instrument_type"] == "CE")].copy()
+                    opt_df = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["instrument_type"] == active_trade_type)].copy()
                     opt_df["expiry"] = pd.to_datetime(opt_df["expiry"])
                     sample_token = int(opt_df[opt_df["expiry"] == opt_df["expiry"].min()].iloc[0]["instrument_token"])
                     res = run_historical_backtest_simulation(kite_client, sample_token, bt_days, bt_target, min_rr)
