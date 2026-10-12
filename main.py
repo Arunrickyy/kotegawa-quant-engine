@@ -14,7 +14,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.0 Pro",
+    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.1 Pro",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -194,7 +194,7 @@ current_day_str = current_datetime.strftime("%A")
 
 st.markdown(f"""
     <div class="terminal-banner">
-        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.0 PRO)</div>
+        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.1 PRO)</div>
         <div class="terminal-subtitle">10-Layer Institutional Vault & Real-Time Bidirectional MTF Stream</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
             📅 Live IST Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
@@ -585,10 +585,13 @@ with tab_dashboard:
                             }
                             st.session_state.paper_ledger.append(new_entry)
                             daily_state["paper_ledger"] = st.session_state.paper_ledger
-                            st.session_state.audit_logs = daily_state["audit_logs"]
+                            
                             log_trade_audit_trail(sym, chosen_type, snip_entry, snip_sl, snip_tgt, audit_trail, score)
+                            st.session_state.audit_logs = daily_state["audit_logs"] # Instant UI Sync
+                            
                             save_daily_state(daily_state)
                             st.toast(f"🤖 AI Auto-Captured {chosen_type} Sniper Setup: {sym} added!")
+                            st.rerun() # Forces immediate reload so audit log shows up instantly
 
                     if is_approved and st.button(f"🚀 Manually Dispatch {chosen_type} Setup & Audit Trail"):
                         ist_time_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime("%H:%M:%S")
@@ -599,8 +602,10 @@ with tab_dashboard:
                         }
                         st.session_state.paper_ledger.append(new_entry)
                         daily_state["paper_ledger"] = st.session_state.paper_ledger
+                        
                         log_trade_audit_trail(sym, chosen_type, snip_entry, snip_sl, snip_tgt, audit_trail, score)
-                        st.session_state.audit_logs = daily_state["audit_logs"]
+                        st.session_state.audit_logs = daily_state["audit_logs"] # Instant UI Sync
+                        
                         save_daily_state(daily_state)
                         st.success(f"✅ Setup {sym} dispatched & audit snapshot recorded!")
                         st.rerun()
