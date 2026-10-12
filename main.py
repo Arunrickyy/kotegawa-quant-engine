@@ -188,16 +188,16 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-current_datetime = datetime.datetime.now()
+current_datetime = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
 current_date_str = current_datetime.strftime("%d %b %Y")
 current_day_str = current_datetime.strftime("%A")
 
 st.markdown(f"""
     <div class="terminal-banner">
         <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v14.0 PRO)</div>
-        <div class="terminal-subtitle">10-Layer Institutional Confluence Vault & Optimized Multi-Timeframe Stream</div>
+        <div class="terminal-subtitle">10-Layer Institutional Confluence Vault & IST-Synced Engine</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
-            📅 Live Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
+            📅 Live IST Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
         </div>
     </div>
 """, unsafe_allow_html=True)
@@ -332,25 +332,31 @@ def calculate_sniper_parameters(ltp, target_pts):
     target = round(entry + target_pts, 2)
     return entry, sl, target
 
-# --- INSTITUTIONAL SAFEGUARDS & 10-LAYER INTELLIGENT ENGINE ---
+# --- INSTITUTIONAL SAFEGUARDS & 10-LAYER INTELLIGENT ENGINE (IST FORCED) ---
 def check_websocket_latency(tick_timestamp):
     if not tick_timestamp: return 0.0
     try:
-        return abs((datetime.datetime.now() - tick_timestamp).total_seconds())
+        ist_now = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
+        return abs((ist_now - tick_timestamp).total_seconds())
     except: return 0.0
 
-def check_economic_calendar_blackout(current_time):
-    h, m = current_time.hour, current_time.minute
+def check_economic_calendar_blackout(current_time_ist):
+    h, m = current_time_ist.hour, current_time_ist.minute
     if (h == 10 and 0 <= m <= 15) or (h == 13 and 30 <= m <= 45):
         return True
     return False
 
 def evaluate_intelligent_10_layer_matrix(market_data):
     audit_trail = {}
-    current_time = datetime.datetime.now().time()
-    l1_pass = current_time >= datetime.time(9, 30)
-    audit_trail["Layer 1 (Time Lockout)"] = "PASS" if l1_pass else "FAIL (Morning Noise)"
-    if not l1_pass: return 0.0, audit_trail, "HOLD: Inside morning noise window (<9:30 AM)"
+    
+    # Force exact IST conversion from server UTC clock
+    ist_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).time()
+    
+    # Layer 1: Time Lockout (> 9:30 AM IST) -> Mandatory Hard Block
+    l1_pass = ist_time >= datetime.time(9, 30)
+    audit_trail["Layer 1 (Time Lockout)"] = "PASS" if l1_pass else f"FAIL (IST: {ist_time.strftime('%H:%M:%S')} < 09:30 AM)"
+    if not l1_pass: 
+        return 0.0, audit_trail, f"HOLD: Inside morning noise window (<9:30 AM IST — Current: {ist_time.strftime('%H:%M:%S')})"
 
     l8_pass = market_data.get("has_secure_stop_loss", True)
     audit_trail["Layer 8 (Stop-Loss Shield)"] = "PASS" if l8_pass else "FAIL"
@@ -388,8 +394,9 @@ def evaluate_intelligent_10_layer_matrix(market_data):
         return score, audit_trail, f"HOLD: Confluence Score {score * 100:.1f}% below 85% threshold"
 
 def log_trade_audit_trail(symbol, trade_type, entry, sl, target, audit_trail, score):
+    ist_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
     audit_entry = {
-        "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Timestamp": ist_str,
         "Symbol": symbol, "Type": trade_type, "Entry": entry, "StopLoss": sl,
         "Target": target, "ConfluenceScore": f"{score * 100:.1f}%", "Checklist": audit_trail
     }
@@ -412,7 +419,7 @@ def fetch_cached_multi_timeframe_data(api_key_str, access_token_str, index_name)
         matched = inst_df[inst_df["tradingsymbol"] == symbol_key.split(":")[-1]]
         if matched.empty: return None
         token = int(matched.iloc[0]["instrument_token"])
-        to_dt = datetime.datetime.now()
+        to_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
         from_dt = to_dt - datetime.timedelta(days=3)
         
         return {
@@ -427,7 +434,7 @@ def fetch_cached_multi_timeframe_data(api_key_str, access_token_str, index_name)
 
 def run_historical_backtest_simulation(kite, symbol_token, days, target_pts, min_rr_val):
     try:
-        to_dt = datetime.datetime.now()
+        to_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
         candles = kite.historical_data(instrument_token=symbol_token, from_date=to_dt - datetime.timedelta(days=days), to_date=to_dt, interval="5minute")
         if not candles or len(candles) < 20: return {"setups": days*3, "win_rate": 64.5, "expectancy": days*3*28}
         setups = len(candles) // 15
@@ -534,7 +541,8 @@ with tab_dashboard:
                 q_data = kite_client.quote([f"NFO:{sym}"])
                 sniper_ltp = float(q_data.get(f"NFO:{sym}", {}).get("last_price", 130.0))
                 
-                if check_economic_calendar_blackout(datetime.datetime.now().time()):
+                ist_now_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).time()
+                if check_economic_calendar_blackout(ist_now_time):
                     st.warning("⚠️ Execution Halted: Active Macro Event Blackout Window.")
                 else:
                     mock_market_data = {
@@ -563,8 +571,9 @@ with tab_dashboard:
                     if st.session_state.auto_sniper_active and is_approved:
                         existing_symbols = [t["Symbol"] for t in st.session_state.paper_ledger]
                         if sym not in existing_symbols:
+                            ist_time_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime("%H:%M:%S")
                             new_entry = {
-                                "Timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                                "Timestamp": ist_time_str,
                                 "Symbol": sym, "Type": chosen_type, "Entry Limit": snip_entry,
                                 "Current LTP": sniper_ltp, "Stop Loss": snip_sl, "Original SL": snip_sl, "Target": snip_tgt, "Status": "⏳ WAITING FOR RETEST"
                             }
@@ -575,8 +584,9 @@ with tab_dashboard:
                             st.toast(f"🤖 AI Auto-Captured 10-Layer Sniper Setup: {sym} added!")
 
                     if is_approved and st.button("🚀 Manually Dispatch Setup & Audit Trail"):
+                        ist_time_str = (datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)).strftime("%H:%M:%S")
                         new_entry = {
-                            "Timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+                            "Timestamp": ist_time_str,
                             "Symbol": sym, "Type": chosen_type, "Entry Limit": snip_entry,
                             "Current LTP": sniper_ltp, "Stop Loss": snip_sl, "Original SL": snip_sl, "Target": snip_tgt, "Status": "⏳ WAITING FOR RETEST"
                         }
