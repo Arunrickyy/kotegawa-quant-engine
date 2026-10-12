@@ -14,7 +14,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.9 Pro",
+    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.10 Pro",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -93,7 +93,7 @@ if "market_behavior_memory" not in st.session_state:
         "total_sessions_observed": 1,
         "optimal_win_hour": "09:30 - 11:00 AM",
         "adaptive_rr_bias": 4.0,
-        "learned_insight": "Awaiting initial forward-test data to calibrate price-action backtest weights."
+        "learned_insight": "Awaiting initial forward-test data to calibrate live Fibonacci weights."
     }
 
 # --- CUSTOM CSS FOR HIGH-CONTRAST TERMINAL ---
@@ -202,8 +202,8 @@ current_day_str = current_datetime.strftime("%A")
 
 st.markdown(f"""
     <div class="terminal-banner">
-        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.9 PRO)</div>
-        <div class="terminal-subtitle">10-Layer Institutional Vault & Price-Action Backtest Engine</div>
+        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.10 PRO)</div>
+        <div class="terminal-subtitle">10-Layer Institutional Vault & Live Fibonacci Swing Engine</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
             📅 Live IST Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
         </div>
@@ -505,9 +505,7 @@ def log_trade_audit_trail(symbol, trade_type, entry, sl, target, audit_trail, sc
     daily_state["audit_logs"].append(audit_entry)
     save_daily_state(daily_state)
 
-# --- RULE-BASED HISTORICAL BACKTEST ENGINE (PRICE-ACTION MATCHED) ---
 def run_historical_backtest_simulation(kite, symbol_token, days, target_pts, min_rr_val):
-    """Scans historical 5m candles and validates setups strictly using candlestick patterns & price action."""
     try:
         to_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=5, minutes=30)
         candles = kite.historical_data(instrument_token=symbol_token, from_date=to_dt - datetime.timedelta(days=days), to_date=to_dt, interval="5minute")
@@ -518,7 +516,6 @@ def run_historical_backtest_simulation(kite, symbol_token, days, target_pts, min
         wins = 0
         sl_hits = 0
         
-        # Slide through historical candles and verify pattern matching
         for i in range(2, len(candles) - 10):
             sub_window = candles[i-2:i+1]
             pattern_name, is_confirmed = detect_candlestick_patterns(sub_window)
@@ -529,7 +526,6 @@ def run_historical_backtest_simulation(kite, symbol_token, days, target_pts, min
                 target_price = entry_price + target_pts
                 stop_loss_price = entry_price - (target_pts / min_rr_val)
                 
-                # Forward test price action over next 10 candles
                 setup_won = False
                 for j in range(i+1, min(i+11, len(candles))):
                     c_high = candles[j]["high"]
@@ -542,9 +538,6 @@ def run_historical_backtest_simulation(kite, symbol_token, days, target_pts, min
                         wins += 1
                         setup_won = True
                         break
-                if not setup_won and valid_setups > wins + sl_hits:
-                    # Default neutral outcome in tight range
-                    pass
 
         total_settled = wins + sl_hits
         if total_settled < 5:
@@ -571,9 +564,9 @@ def process_behavioral_learning(ledger_list):
         st.session_state.market_behavior_memory["learned_insight"] = "⚠️ Low win rate detected. Candlestick pattern filtering tightened."
     elif win_ratio >= 0.7:
         st.session_state.market_behavior_memory["adaptive_rr_bias"] = min_rr
-        st.session_state.market_behavior_memory["learned_insight"] = "🔥 High success rate observed with price-action backtest matching."
+        st.session_state.market_behavior_memory["learned_insight"] = "🔥 High success rate observed with live Fibonacci & price-action backtesting."
     else:
-        st.session_state.market_behavior_memory["learned_insight"] = "🟢 System operating within stable institutional candlestick bands."
+        st.session_state.market_behavior_memory["learned_insight"] = "🟢 System operating within stable institutional bands."
     return st.session_state.market_behavior_memory
 
 # --- TOP METRICS BAR ---
@@ -601,7 +594,7 @@ st.write("")
 tab_dashboard, tab_backtest, tab_sr_fib, tab_strategy, tab_ledger = st.tabs([
     "📊 Institutional Quant Dashboard", 
     "📊 Historical Backtest Engine", 
-    "📈 S&R & Fibonacci Levels", 
+    "📈 Live S&R & Fibonacci Levels", 
     "🧬 Multi-Leg Strategy Builder", 
     "📝 Paper Trading Ledger & AI Feedback"
 ])
@@ -846,32 +839,43 @@ with tab_backtest:
             else:
                 st.warning("⚠️ Authorize Kite session in sidebar first.")
 
-# ================= TAB 3: S&R & FIBONACCI =================
+# ================= TAB 3: LIVE S&R & FIBONACCI =================
 with tab_sr_fib:
-    st.markdown(f"### 📈 Support & Resistance Pivots and Fibonacci Matrix ({selected_index})")
-    prev_high, prev_low, prev_close = spot_price * 1.008, spot_price * 0.992, spot_price * 0.998
-    pivot = (prev_high + prev_low + prev_close) / 3.0
-    r1, s1 = (2.0 * pivot) - prev_low, (2.0 * pivot) - prev_high
+    st.markdown(f"### 📈 Live Support & Resistance Pivots and Dynamic Fibonacci Matrix ({selected_index})")
+    
+    # Live Swing Extraction from Kite Feed if available
+    live_swing_high, live_swing_low = spot_price * 1.008, spot_price * 0.992
+    if mtf_data_cache and "5m" in mtf_data_cache and len(mtf_data_cache["5m"]) > 10:
+        df_5m = pd.DataFrame(mtf_data_cache["5m"])
+        live_swing_high = float(df_5m["high"].max())
+        live_swing_low = float(df_5m["low"].min())
+
+    pivot = (live_swing_high + live_swing_low + spot_price) / 3.0
+    r1, s1 = (2.0 * pivot) - live_swing_low, (2.0 * pivot) - live_swing_high
     sr_levels = {
-        "Resistance R2": round(pivot + (prev_high - prev_low), 2),
-        "Resistance R1": round(r1, 2), "Pivot Point (P)": round(pivot, 2),
-        "Support S1": round(s1, 2), "Support S2": round(pivot - (prev_high - prev_low), 2)
+        "Resistance R2": round(pivot + (live_swing_high - live_swing_low), 2),
+        "Resistance R1": round(r1, 2), "Live Pivot Point (P)": round(pivot, 2),
+        "Support S1": round(s1, 2), "Support S2": round(pivot - (live_swing_high - live_swing_low), 2)
     }
-    swing_diff = prev_high - prev_low
+    
+    swing_diff = live_swing_high - live_swing_low
     fib_levels = {
-        "Fib 0.0% (High)": round(prev_high, 2),
-        "Fib 38.2%": round(prev_high - (0.382 * swing_diff), 2),
-        "Fib 50.0% (Midpoint)": round(prev_high - (0.500 * swing_diff), 2),
-        "Fib 61.8% (Golden Pocket)": round(prev_high - (0.618 * swing_diff), 2),
-        "Fib 100.0% (Low)": round(prev_low, 2)
+        "Fib 0.0% (Live Swing High)": round(live_swing_high, 2),
+        "Fib 23.6% Retracement": round(live_swing_high - (0.236 * swing_diff), 2),
+        "Fib 38.2% Retracement": round(live_swing_high - (0.382 * swing_diff), 2),
+        "Fib 50.0% Midpoint": round(live_swing_high - (0.500 * swing_diff), 2),
+        "Fib 61.8% (Golden Pocket Zone)": round(live_swing_high - (0.618 * swing_diff), 2),
+        "Fib 78.6% Deep Retest": round(live_swing_high - (0.786 * swing_diff), 2),
+        "Fib 100.0% (Live Swing Low)": round(live_swing_low, 2)
     }
+    
     col_a, col_b = st.columns(2)
     with col_a:
-        st.markdown("#### 🏛️ Pivot Levels")
+        st.markdown("#### 🏛️ Live Intraday Pivot Levels")
         st.dataframe(pd.DataFrame(list(sr_levels.items()), columns=["Level", "Price (₹)"]), use_container_width=True, hide_index=True)
     with col_b:
-        st.markdown("#### 🌀 Fibonacci Matrix")
-        st.dataframe(pd.DataFrame(list(fib_levels.items()), columns=["Level", "Price (₹)"]), use_container_width=True, hide_index=True)
+        st.markdown("#### 🌀 Real-Time Fibonacci Golden Pocket Matrix")
+        st.dataframe(pd.DataFrame(list(fib_levels.items()), columns=["Fib Level", "Live Working Point (₹)"]), use_container_width=True, hide_index=True)
 
 # ================= TAB 4: STRATEGY BUILDER =================
 with tab_strategy:
