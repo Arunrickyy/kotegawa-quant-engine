@@ -14,7 +14,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.2 Pro",
+    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.25 Pro",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -79,7 +79,7 @@ if "market_behavior_memory" not in st.session_state:
         "total_sessions_observed": 1,
         "optimal_win_hour": "09:30 - 11:00 AM",
         "adaptive_rr_bias": 4.0,
-        "learned_insight": "Awaiting initial forward-test data to calibrate live Fibonacci weights."
+        "learned_insight": "Awaiting initial forward-test data to calibrate live Fibonacci & SMC weights."
     }
 
 st.markdown("""
@@ -111,8 +111,8 @@ current_day_str = current_datetime.strftime("%A")
 
 st.markdown(f"""
     <div class="terminal-banner">
-        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.2 PRO)</div>
-        <div class="terminal-subtitle">10-Layer Institutional Vault & Live Fibonacci Swing Engine</div>
+        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.25 PRO)</div>
+        <div class="terminal-subtitle">10-Layer Institutional Vault, SMC Liquidity & Multi-Timeframe Engine</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
             📅 Live IST Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
         </div>
@@ -415,7 +415,7 @@ def process_behavioral_learning(ledger_list):
     else: st.session_state.market_behavior_memory["learned_insight"] = "🟢 System operating within stable institutional bands."
     return st.session_state.market_behavior_memory
 
-# --- TOP METRICS BAR (SAFE RENDERING WRAPPER) ---
+# --- TOP METRICS BAR ---
 try:
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.markdown(f'<div class="metric-card"><div class="metric-label">📈 Spot ({selected_index})</div><div class="metric-value">₹{spot_price:,.1f}</div></div>', unsafe_allow_html=True)
@@ -464,6 +464,32 @@ with tab_dashboard:
         </div>
     """, unsafe_allow_html=True)
 
+    # --- RESTORED: MULTI-TIMEFRAME & 10-LAYER AUDIT VISIBILITY EXPANDERS ---
+    with st.expander("🌐 Multi-Timeframe Trend Matrix (1m, 3m, 5m, 15m, 60m)", expanded=True):
+        if mtf_data_cache and not isinstance(mtf_data_cache, dict) or (isinstance(mtf_data_cache, dict) and "error" not in mtf_data_cache):
+            tf_rows = []
+            for tf_key in ["1m", "3m", "5m", "15m", "60m"]:
+                candles = mtf_data_cache.get(tf_key)
+                if candles and len(candles) >= 3:
+                    df_tf = pd.DataFrame(candles)
+                    last_close = float(df_tf["close"].iloc[-1])
+                    prev_close = float(df_tf["close"].iloc[-3])
+                    trend_dir = "🟢 BULLISH" if last_close > prev_close else "🔴 BEARISH"
+                    tf_rows.append({"Timeframe": tf_key.upper(), "Latest Close": round(last_close, 2), "Momentum Trend": trend_dir})
+            if tf_rows:
+                st.dataframe(pd.DataFrame(tf_rows), use_container_width=True, hide_index=True)
+            else:
+                st.info("ℹ️ Live multi-timeframe candles syncing from Zerodha...")
+        else:
+            st.info("ℹ️ Connect Zerodha Kite in sidebar to stream live multi-timeframe candle voting.")
+
+    with st.expander("🛡️ 10-Layer Institutional Vault & Checklist Status", expanded=True):
+        mock_market_data = {"vix": india_vix, "has_secure_stop_loss": True, "pcr": overall_pcr, "candle_pattern_ok": candle_confirmed}
+        score, audit_trail, engine_status = evaluate_intelligent_10_layer_matrix(mock_market_data, active_trade_type)
+        audit_df = pd.DataFrame(list(audit_trail.items()), columns=["Institutional Layer", "Status"])
+        st.dataframe(audit_df, use_container_width=True, hide_index=True)
+        st.markdown(f"**Confluence Score:** `{score * 100:.1f}%` | **Engine Decision:** `{engine_status}`")
+
     if kite_client:
         try:
             inst_df = pd.DataFrame(kite_client.instruments("NFO"))
@@ -477,15 +503,11 @@ with tab_dashboard:
                 sym = sniper_row.iloc[0]["tradingsymbol"]
                 q_data = kite_client.quote([f"NFO:{sym}"])
                 sniper_ltp = float(q_data.get(f"NFO:{sym}", {}).get("last_price", 130.0))
-                mock_market_data = {"vix": india_vix, "has_secure_stop_loss": True, "pcr": overall_pcr, "candle_pattern_ok": candle_confirmed}
-                score, audit_trail, engine_status = evaluate_intelligent_10_layer_matrix(
-                    mock_market_data, active_trade_type
-                )
                 snip_entry, snip_sl, snip_tgt = calculate_sniper_parameters(sniper_ltp, sl_pct)
                 is_approved = score >= 0.85
                 
                 st.markdown(f"""
-                    <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid {'#56d364' if is_approved else '#ff7b72'}; padding: 22px; border-radius: 10px; margin-bottom: 20px;">
+                    <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid {'#56d364' if is_approved else '#ff7b72'}; padding: 22px; border-radius: 10px; margin-bottom: 20px; margin-top: 20px;">
                         <div style="color: {'#56d364' if is_approved else '#ff7b72'}; font-size: 1.25rem; font-weight: 800;">🔥 VAULT STATUS: {sym} — {engine_status}</div>
                         • <b>Entry:</b> ₹{snip_entry} | <b>SL:</b> ₹{snip_sl} | <b>Target (1:{min_rr}):</b> ₹{snip_tgt} &nbsp;|&nbsp; <b>Mode:</b> {execution_mode}
                     </div>
