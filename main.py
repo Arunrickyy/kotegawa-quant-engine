@@ -82,7 +82,8 @@ if "market_behavior_memory" not in st.session_state:
         "learned_insight": "Awaiting initial forward-test data to calibrate live Fibonacci weights."
     }
 
-st.markdown("""
+st.markdown(
+    """
     <style>
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
@@ -95,12 +96,4 @@ st.markdown("""
     .terminal-banner { background: linear-gradient(135deg, #161b22 0%, #0d1117 100%); border: 1px solid #30363d; padding: 25px; border-radius: 12px; text-align: center; margin-bottom: 25px; box-shadow: 0 4px 15px rgba(0,0,0,0.6); }
     .terminal-title { color: #ffffff; font-size: 2.2rem; font-weight: 800; letter-spacing: 1px; margin-bottom: 5px; }
     .terminal-subtitle { color: #8b949e; font-size: 1.05rem; font-weight: 500; }
-    .metric-card { background-color: #161b22; border: 1px solid #30363d; padding: 18px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
-    .metric-label { color: #8b949e; font-size: 0.9rem; font-weight: 600; margin-bottom: 6px; }
-    .metric-value { color: #f0f6fc; font-size: 1.25rem; font-weight: 700; }
-    .stButton > button { background: linear-gradient(135deg, #238636 0%, #2ea043 100%); color: white; border: 1px solid #3fb950; font-weight: 700; border-radius: 8px; padding: 0.6rem 1rem; box-shadow: 0 3px 6px rgba(0,0,0,0.3); transition: 0.2s ease-in-out; }
-    .stButton > button:hover { background: linear-gradient(135deg, #2ea043 100%, #3fb950 100%); border-color: #56d364; }
-    section[data-testid="stSidebar"] { background-color: #0d1117; border-right: 1px solid #30363d; }
-    section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] span { color: #ffffff !important; }
-    </style>
-""", unsafe_allow
+    .metric-card { background-color: #1
