@@ -12,14 +12,15 @@ import yfinance as yf
 from kiteconnect import KiteConnect
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. PAGE CONFIGURATION & SECURITY ---
+# --- 1. PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.16 Pro",
+    page_title="Kotegawa Quant Engine - Autonomous AI Sniper Terminal v15.1 Pro",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# --- 2. DEVICE SECURITY LOCK ---
 AUTHORIZED_DEVICE_KEY = "arun_private_phone_key_2026"
 query_params = st.query_params
 device_key = query_params.get("device", "")
@@ -28,7 +29,7 @@ if device_key != AUTHORIZED_DEVICE_KEY:
     st.error("🚫 Access Denied: This trading engine is restricted to authorized devices only.")
     st.stop()
 
-# --- 2. PERSISTENT PERMANENT STATE HANDLING (`daily_state.json`) ---
+# --- 3. PERSISTENT PERMANENT STATE HANDLING (`daily_state.json`) ---
 STATE_FILE = "daily_state.json"
 
 def get_today_str():
@@ -48,6 +49,7 @@ def load_daily_state():
         try:
             with open(STATE_FILE, "r") as f:
                 data = json.load(f)
+                # Permanently preserve ledger and audit logs across reboots, logins, and date changes
                 state["paper_ledger"] = data.get("paper_ledger", [])
                 state["audit_logs"] = data.get("audit_logs", [])
                 state["access_token"] = data.get("access_token", None)
@@ -78,7 +80,7 @@ if "market_behavior_memory" not in st.session_state:
         "total_sessions_observed": 1,
         "optimal_win_hour": "09:30 - 11:00 AM",
         "adaptive_rr_bias": 4.0,
-        "learned_insight": "Awaiting initial forward-test data to calibrate live Fibonacci & SMC weights."
+        "learned_insight": "Awaiting initial forward-test data to calibrate live Fibonacci weights."
     }
 
 st.markdown("""
@@ -110,15 +112,14 @@ current_day_str = current_datetime.strftime("%A")
 
 st.markdown(f"""
     <div class="terminal-banner">
-        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.16 PRO)</div>
-        <div class="terminal-subtitle">10-Layer Institutional Vault, SMC Liquidity & Black-Scholes Greeks</div>
+        <div class="terminal-title">⚡ KOTEGAWA QUANT ENGINE (AI SNIPER v15.1 PRO)</div>
+        <div class="terminal-subtitle">10-Layer Institutional Vault & Live Fibonacci Swing Engine</div>
         <div style="color: #58a6ff; font-size: 0.95rem; margin-top: 10px;">
             📅 Live IST Session: <b>{current_day_str}, {current_date_str}</b> &nbsp;|&nbsp; Developed by <b>Arun Kummar</b>
         </div>
     </div>
 """, unsafe_allow_html=True)
 
-# --- 3. SIDEBAR CONTROLS ---
 st.sidebar.header("🔌 Zerodha Kite Cloud Bridge")
 try:
     api_key = st.secrets["KITE_API_KEY"]
@@ -206,7 +207,7 @@ st.session_state.runner_mode_active = runner_mode
 daily_state["runner_mode_active"] = runner_mode
 save_daily_state(daily_state)
 
-# --- 4. EMBEDDED BACKEND BACKTESTER ENGINE ---
+# --- EMBEDDED BACKEND BACKTESTER ENGINE ---
 def run_offline_institutional_backtest(api_key, access_token, instrument_token, days=30, min_rr=4.0):
     try:
         kite = KiteConnect(api_key=api_key)
@@ -264,7 +265,7 @@ def run_offline_institutional_backtest(api_key, access_token, instrument_token, 
         with open("backtest_results.json", "w") as f: json.dump(error_res, f, indent=4)
         return None
 
-# --- 5. BLACK-SCHOLES MATH & GREEKS ENGINE ---
+# --- MATH & GREEKS FUNCTIONS ---
 fn_bs_price = lambda S, K, T, r, sigma, opt_type: (
     S * norm.cdf((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))) - 
     K * np.exp(-r * T) * norm.cdf(((np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))) - sigma * np.sqrt(T))
@@ -417,3 +418,62 @@ def process_behavioral_learning(ledger_list):
 
 # --- TOP METRICS BAR ---
 c1, c2, c3, c4, c5 = st.columns(5)
+c1.markdown(f'<div class="metric-card"><div class="metric-label">📈 Spot ({selected_index})</div><div class="metric-value">₹{spot_price:,.1f}</div></div>', unsafe_allow_html=True)
+c2.markdown(f'<div class="metric-card"><div class="metric-label">⚡ India VIX</div><div class="metric-value" style="color: #ff7b72;">{india_vix}</div></div>', unsafe_allow_html=True)
+c3.markdown(f'<div class="metric-card"><div class="metric-label">📊 PCR</div><div class="metric-value" style="color: #3fb950;">{overall_pcr}</div></div>', unsafe_allow_html=True)
+expiry_alert_color = "#ff7b72" if days_to_expiry == 0 else "#58a6ff"
+c4.markdown(f'<div class="metric-card"><div class="metric-label">🗓️ Session Expiry</div><div class="metric-value" style="font-size: 1.05rem; color: #f0f6fc;">{current_day_str}</div><div style="font-size: 0.8rem; color: {expiry_alert_color}; font-weight: 700;">⏳ {days_to_expiry}d remaining</div></div>', unsafe_allow_html=True)
+c5.markdown(f'<div class="metric-card"><div class="metric-label">📦 Lot Size</div><div class="metric-value">{lot_size}</div></div>', unsafe_allow_html=True)
+
+st.write("")
+
+tab_dashboard, tab_backtest, tab_sr_fib, tab_strategy, tab_ledger = st.tabs([
+    "📊 Institutional Quant Dashboard", "📊 Historical Backtest Engine", 
+    "📈 Live S&R & Fibonacci Levels", "🧬 Multi-Leg Strategy Builder", 
+    "📝 Paper Trading Ledger & AI Feedback"
+])
+
+# ================= TAB 1: DASHBOARD =================
+with tab_dashboard:
+    ai_memory = process_behavioral_learning(st.session_state.paper_ledger)
+    st.markdown(f"""
+        <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid #58a6ff; padding: 16px; border-radius: 8px; margin-bottom: 20px;">
+            <div style="color: #58a6ff; font-size: 1.1rem; font-weight: 800;">🧠 AI Behavioral Learning & Candlestick Co-Pilot</div>
+            <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 5px;">{ai_memory['learned_insight']}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    mtf_data_cache = None
+    if kite_client and daily_state.get("access_token"):
+        mtf_data_cache = fetch_realtime_multi_timeframe_data(api_key, daily_state["access_token"], selected_index)
+
+    active_trade_type = determine_dynamic_trade_bias(mtf_data_cache, overall_pcr, fii_sentiment)
+    bias_color = "#56d364" if active_trade_type == "CE" else "#ff7b72"
+    detected_candle_pattern, candle_confirmed = "Standard Momentum", True
+    if mtf_data_cache and "5m" in mtf_data_cache and len(mtf_data_cache["5m"]) >= 3:
+        detected_candle_pattern, candle_confirmed = detect_candlestick_patterns(mtf_data_cache["5m"])
+
+    st.markdown(f"""
+        <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 6px solid {bias_color}; padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+            <div style="color: {bias_color}; font-size: 1.2rem; font-weight: 800;">🔍 Active Pattern: {detected_candle_pattern} ({active_trade_type} Mode)</div>
+            <div style="color: #f0f6fc; font-size: 0.95rem; margin-top: 8px;">
+                • <b>Status:</b> {"✅ Validated" if candle_confirmed else "⏳ Waiting"} &nbsp;|&nbsp; <b>Target R:R:</b> 1:{min_rr}
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    if kite_client:
+        try:
+            inst_df = pd.DataFrame(kite_client.instruments("NFO"))
+            opt_df = inst_df[(inst_df["name"] == selected_index.upper()) & (inst_df["instrument_type"] == active_trade_type)].copy()
+            opt_df["expiry"] = pd.to_datetime(opt_df["expiry"])
+            current_chain = opt_df[opt_df["expiry"] == opt_df["expiry"].min()]
+            strike_diff = 50 if selected_index in ["Nifty", "FinNifty"] else 100
+            atm = round(spot_price / strike_diff) * strike_diff
+            sniper_row = current_chain[(current_chain["strike"] == atm) & (current_chain["instrument_type"] == active_trade_type)]
+            if not sniper_row.empty:
+                sym = sniper_row.iloc[0]["tradingsymbol"]
+                q_data = kite_client.quote([f"NFO:{sym}"])
+                sniper_ltp = float(q_data.get(f"NFO:{sym}", {}).get("last_price", 130.0))
+                mock_market_data = {"vix": india_vix, "has_secure_stop_loss": True, "pcr": overall_pcr, "candle_pattern_ok": candle_confirmed}
+                score, audit_trail, engine_status = evaluate_intelligent_10_layer_matrix(mock_market_data,
