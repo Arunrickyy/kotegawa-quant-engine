@@ -173,4 +173,27 @@ days_to_expiry = (target_weekday - current_weekday) % 7
 spot_fetched_via_kite = False
 if kite_client:
     try:
-        kite_symbol_map = {"Nifty": "NSE:NIFTY 50", "BankNifty": "NSE:NIFTY BANK", "FinNifty": "NSE:NIFTY
+        kite_symbol_map = {"Nifty": "NSE:NIFTY 50", "BankNifty": "NSE:NIFTY BANK", "FinNifty": "NSE:NIFTY FIN SERVICE", "NiftyIT": "NSE:NIFTY IT"}
+        quote = kite_client.quote(kite_symbol_map[selected_index])
+        spot_price = float(quote[kite_symbol_map[selected_index]]["last_price"])
+        spot_fetched_via_kite = True
+    except: pass
+
+if not spot_fetched_via_kite:
+    try:
+        live_ticker = yf.Ticker({"Nifty": "^NSEI", "BankNifty": "^NSEBANK", "FinNifty": "NIFTY_FIN_SERVICE.NS", "NiftyIT": "^CNXIT"}[selected_index])
+        todays_data = live_ticker.history(period="1d")
+        if not todays_data.empty: spot_price = float(todays_data['Close'].iloc[-1])
+    except: pass
+
+auto_fii = "Net Bullish (Longs)" if overall_pcr >= 1.0 else "Net Bearish (Shorts)"
+fii_sentiment = st.sidebar.selectbox("🏛️ FII Index Future Bias", ["Net Bullish (Longs)", "Net Bearish (Shorts)", "Neutral / Mixed"], index=["Net Bullish (Longs)", "Net Bearish (Shorts)", "Neutral / Mixed"].index(auto_fii))
+min_rr = st.sidebar.slider("Min Risk-Reward Ratio", 1.0, 5.0, 4.0, 0.5)
+sl_pct = st.sidebar.slider("Stop Loss Drop (%)", 10.0, 40.0, 25.0, 5.0) / 100.0
+
+st.sidebar.markdown("---")
+st.sidebar.header("🎯 Order Execution Mode")
+execution_mode = st.sidebar.selectbox("Execution Type", ["⚡ Instant Market Sniper", "🛡️ Limit Retest + TTL (15m expiry)"], index=0)
+
+st.sidebar.markdown("---")
+st.sidebar.header("🤖 Automation & Runner Controls")
