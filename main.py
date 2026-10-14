@@ -491,6 +491,25 @@ def determine_dynamic_trade_bias(mtf, pcr_val, fii_bias):
     return dirn
 
 
+def display_bias(mtf, pcr_val):
+    """View-only direction (all 5 timeframes, majority vote). Never used to place trades."""
+    if not mtf or "error" in mtf:
+        return None
+    bull = bear = 0
+    for k in ["1m", "3m", "5m", "15m", "60m"]:
+        c = (mtf.get(k) or [])[:-1]
+        if len(c) >= 3:
+            if c[-1]["close"] - c[-3]["close"] > 0:
+                bull += 1
+            else:
+                bear += 1
+    if bull != bear:
+        return "CE" if bull > bear else "PE"
+    if pcr_val is not None:
+        return "CE" if pcr_val >= 1.0 else "PE"
+    return None
+
+
 # ---------- Black-Scholes ----------
 def bs_price(S, K, T, r, sigma, opt):
     T = max(T, 1e-6)
@@ -794,7 +813,8 @@ overall_pcr = pcr_near = None
 if kite_client and chain is not None and spot_price:
     overall_pcr, pcr_near = compute_pcr(kite_client, chain, spot_price, strike_step)
 
-active_trade_type = determine_dynamic_trade_bias(mtf if mtf_ok else None, overall_pcr, fii_sentiment)
+trade_bias = determine_dynamic_trade_bias(mtf if mtf_ok else None, overall_pcr, fii_sentiment)  # None = no trading
+active_trade_type = trade_bias or display_bias(mtf if mtf_ok else None, overall_pcr)           # what we display
 levels = compute_levels(mtf["5m"]) if mtf_ok else compute_levels(None)
 
 ledger_rows, ledger_stats, ledger_changed = process_ledger(ledger, kite_client, lot_size, runner_mode)
@@ -851,10 +871,12 @@ with tab_dashboard:
         st.warning(f"No option chain found for {selected_index} (index may not have derivatives).")
     elif isinstance(mtf, dict) and "error" in mtf:
         st.warning(f"Market data unavailable: {mtf['error']}")
-    elif not active_trade_type:
-        st.info("⏸️ Standing aside: 15m and 60m trends disagree (or conflict with FII bias).")
 
     if engine_ready:
+        view_tag = "" if trade_bias else " · VIEW ONLY"
+        if not trade_bias:
+            st.info("👁️ VIEW-ONLY MODE: 15m and 60m trends disagree (or conflict with FII bias). "
+                    "All data is shown below, but no paper trades will be captured until they agree.")
         ce = active_trade_type == "CE"
         bias_color = "#56d364" if ce else "#ff7b72"
         closed_5m = mtf["5m"][:-1]
@@ -869,7 +891,7 @@ with tab_dashboard:
         zone_txt = f"₹{retest_zone:,.1f} (Fib 61.8% of today's swing)" if retest_zone else "N/A (need ≥6 candles today)"
         st.markdown(
             f"""<div style="background-color:#161b22;border:1px solid #30363d;border-left:6px solid {bias_color};padding:20px;border-radius:10px;margin-bottom:20px;">
-            <div style="color:{bias_color};font-size:1.2rem;font-weight:800;">🔍 {pattern_name} ({active_trade_type} Mode)</div>
+            <div style="color:{bias_color};font-size:1.2rem;font-weight:800;">🔍 {pattern_name} ({active_trade_type} Mode{view_tag})</div>
             <div style="color:#f0f6fc;font-size:0.95rem;margin-top:8px;">
             • <b>Retest Zone:</b> {zone_txt}<br>
             • <b>Confirmation:</b> {retest_msg}<br>
@@ -916,7 +938,7 @@ with tab_dashboard:
                 border = "#56d364" if approved else "#ff7b72"
                 st.markdown(
                     f"""<div style="background-color:#161b22;border:1px solid #30363d;border-left:6px solid {border};padding:22px;border-radius:10px;margin-bottom:20px;">
-                    <div style="color:{border};font-size:1.25rem;font-weight:800;">🔥 {active_trade_type} VAULT: {sym} — {status}</div>
+                    <div style="color:{border};font-size:1.25rem;font-weight:800;">🔥 {active_trade_type} VAULT{view_tag}: {sym} — {status}</div>
                     <div style="color:#f0f6fc;font-size:0.95rem;margin-top:8px;">
                     • <b>Limit Entry:</b> ₹{snip_entry} | <b>Stop Loss:</b> ₹{snip_sl} | <b>Target (1:{min_rr}):</b>
                     <span style="color:#56d364;font-weight:bold;">₹{snip_tgt}</span> | <b>IV:</b> {fmt(iv)}%</div></div>""",
@@ -926,7 +948,9 @@ with tab_dashboard:
 
                 ok_new, why = can_open_new_trade(ledger, ledger_stats)
                 existing = [t["Symbol"] for t in ledger]
-                if approved and not ok_new:
+                if approved and not trade_bias:
+                    st.info("Score passed, but the 15m + 60m trend rule is not met — view only, no paper trade captured.")
+                elif approved and not ok_new:
                     st.info(f"Dispatch blocked: {why}")
                 elif approved and sym in existing:
                     st.info(f"{sym} was already traded today.")
