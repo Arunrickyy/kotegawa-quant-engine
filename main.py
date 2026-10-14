@@ -491,6 +491,105 @@ def determine_dynamic_trade_bias(mtf, pcr_val, fii_bias):
     return dirn
 
 
+def smc_analyze(candles, n=2, min_gap_pct=0.0003):
+    """View-only Smart Money Concepts read on CLOSED candles (list of dicts).
+    Finds confirmed swings, BOS / CHoCH (close beyond last swing), liquidity sweeps
+    (wick beyond swing, close back inside) and unfilled fair value gaps (3-candle gaps)."""
+    m = len(candles)
+    res = {"events": [], "fvgs": [], "trend": 0, "m": m}
+    if m < 12:
+        return res
+
+    def tstr(k):
+        return candles[k]["date"].strftime("%d %b %H:%M")
+
+    swing_at = {}  # confirmation index -> [(kind, price)]
+    for i in range(n, m - n):
+        h, l = candles[i]["high"], candles[i]["low"]
+        if (h > max(c["high"] for c in candles[i - n:i])
+                and h > max(c["high"] for c in candles[i + 1:i + n + 1])):
+            swing_at.setdefault(i + n, []).append(("H", h))
+        if (l < min(c["low"] for c in candles[i - n:i])
+                and l < min(c["low"] for c in candles[i + 1:i + n + 1])):
+            swing_at.setdefault(i + n, []).append(("L", l))
+
+    last_h = last_l = None
+    trend = 0
+    for k in range(m):
+        for kind, price in swing_at.get(k, []):
+            if kind == "H":
+                last_h = {"p": price, "done": False, "swept": False}
+            else:
+                last_l = {"p": price, "done": False, "swept": False}
+        c = candles[k]
+        if last_h and not last_h["done"]:
+            if c["close"] > last_h["p"]:
+                res["events"].append({"k": k, "kind": "CHoCH" if trend == -1 else "BOS", "dir": "bull",
+                                      "level": last_h["p"], "time": tstr(k)})
+                trend, last_h["done"] = 1, True
+            elif c["high"] > last_h["p"] and not last_h["swept"]:
+                res["events"].append({"k": k, "kind": "Sweep", "dir": "bear",
+                                      "level": last_h["p"], "time": tstr(k)})
+                last_h["swept"] = True
+        if last_l and not last_l["done"]:
+            if c["close"] < last_l["p"]:
+                res["events"].append({"k": k, "kind": "CHoCH" if trend == 1 else "BOS", "dir": "bear",
+                                      "level": last_l["p"], "time": tstr(k)})
+                trend, last_l["done"] = -1, True
+            elif c["low"] < last_l["p"] and not last_l["swept"]:
+                res["events"].append({"k": k, "kind": "Sweep", "dir": "bull",
+                                      "level": last_l["p"], "time": tstr(k)})
+                last_l["swept"] = True
+    res["trend"] = trend
+
+    for i in range(2, m):
+        a, c3 = candles[i - 2], candles[i]
+        if a["date"].date() != c3["date"].date():
+            continue  # ignore overnight gaps
+        gap_min = min_gap_pct * c3["close"]
+        if c3["low"] > a["high"] and (c3["low"] - a["high"]) >= gap_min:
+            bottom, top, d = a["high"], c3["low"], "bull"
+            filled = any(x["low"] <= bottom for x in candles[i + 1:])
+        elif c3["high"] < a["low"] and (a["low"] - c3["high"]) >= gap_min:
+            bottom, top, d = c3["high"], a["low"], "bear"
+            filled = any(x["high"] >= top for x in candles[i + 1:])
+        else:
+            continue
+        if not filled:
+            res["fvgs"].append({"i": i, "dir": d, "bottom": bottom, "top": top, "time": tstr(i)})
+    return res
+
+
+def smc_sequence(res, direction, spot, lookback=24):
+    """Checks the entry sequence for CE (bull) or PE (bear): sweep -> structure break -> FVG -> price back in FVG."""
+    want = "bull" if direction == "CE" else "bear"
+    steps = {"1 Liquidity sweep (last 2h)": False, "2 Structure break after sweep": False,
+             "3 Unfilled fair value gap left": False, "4 Price back inside the gap": False}
+    sweeps = [e for e in res["events"] if e["kind"] == "Sweep" and e["dir"] == want
+              and res["m"] - 1 - e["k"] <= lookback]
+    if not sweeps:
+        return steps
+    ks = sweeps[-1]["k"]
+    keys = list(steps)
+    steps[keys[0]] = True
+    steps[keys[1]] = any(e["kind"] in ("BOS", "CHoCH") and e["dir"] == want and e["k"] > ks for e in res["events"])
+    fv = [f for f in res["fvgs"] if f["dir"] == want and f["i"] >= ks]
+    steps[keys[2]] = bool(fv)
+    steps[keys[3]] = any(f["bottom"] <= spot <= f["top"] for f in fv)
+    return steps
+
+
+def tf_trend(mtf, key):
+    """+1 bullish, -1 bearish, 0 flat/no data (last 3 closed candles of that timeframe)."""
+    if not mtf or "error" in mtf:
+        return 0
+    c = (mtf.get(key) or [])[:-1]
+    if len(c) < 3:
+        return 0
+    d = c[-1]["close"] - c[-3]["close"]
+    return 1 if d > 0 else -1 if d < 0 else 0
+
+
 def display_bias(mtf, pcr_val):
     """View-only direction (all 5 timeframes, majority vote). Never used to place trades."""
     if not mtf or "error" in mtf:
@@ -814,6 +913,8 @@ if kite_client and chain is not None and spot_price:
     overall_pcr, pcr_near = compute_pcr(kite_client, chain, spot_price, strike_step)
 
 trade_bias = determine_dynamic_trade_bias(mtf if mtf_ok else None, overall_pcr, fii_sentiment)  # None = no trading
+trend_15 = tf_trend(mtf if mtf_ok else None, "15m")
+trend_60 = tf_trend(mtf if mtf_ok else None, "60m")
 active_trade_type = trade_bias or display_bias(mtf if mtf_ok else None, overall_pcr)           # what we display
 levels = compute_levels(mtf["5m"]) if mtf_ok else compute_levels(None)
 
@@ -874,12 +975,16 @@ with tab_dashboard:
 
     if engine_ready:
         view_tag = "" if trade_bias else " · VIEW ONLY"
+        gate_info = {"score": None, "audit": {}, "dup": False}
         if not trade_bias:
             st.info("👁️ VIEW-ONLY MODE: 15m and 60m trends disagree (or conflict with FII bias). "
                     "All data is shown below, but no paper trades will be captured until they agree.")
         ce = active_trade_type == "CE"
         bias_color = "#56d364" if ce else "#ff7b72"
         closed_5m = mtf["5m"][:-1]
+        smc = smc_analyze(closed_5m[-150:])
+        smc_steps = smc_sequence(smc, active_trade_type, spot_price)
+        smc_done = sum(smc_steps.values())
         pattern_name, candle_bias = detect_candlestick_patterns(closed_5m)
         hi, lo = levels["swing_high"], levels["swing_low"]
         retest_zone = None
@@ -934,6 +1039,12 @@ with tab_dashboard:
                     "sl_valid": 0 < snip_sl < snip_entry,
                 }
                 score, audit_trail, status = evaluate_confluence(md, active_trade_type, min_score)
+                _dn = {1: "Bullish", -1: "Bearish", 0: "Flat/NA"}
+                audit_trail.update({  # context saved with every audit snapshot for later study
+                    "Context: 15m trend": _dn[trend_15], "Context: 60m trend": _dn[trend_60],
+                    "Context: SMC steps (of 4)": smc_done, "Context: SMC structure": {1: "Bullish", -1: "Bearish", 0: "Undetermined"}[smc["trend"]], "Context: VIX": india_vix, "Context: PCR": overall_pcr, "Context: Near-ATM PCR": pcr_near,
+                })
+                gate_info.update(score=score, audit=audit_trail)
                 approved = status.startswith("EXECUTE")
                 border = "#56d364" if approved else "#ff7b72"
                 st.markdown(
@@ -948,6 +1059,7 @@ with tab_dashboard:
 
                 ok_new, why = can_open_new_trade(ledger, ledger_stats)
                 existing = [t["Symbol"] for t in ledger]
+                gate_info["dup"] = sym in existing
                 if approved and not trade_bias:
                     st.info("Score passed, but the 15m + 60m trend rule is not met — view only, no paper trade captured.")
                 elif approved and not ok_new:
@@ -967,6 +1079,93 @@ with tab_dashboard:
                         st.rerun()
                 else:
                     st.warning("Dispatch blocked: confluence requirements not met.")
+
+        # ---------------- LIVE GATE TRACKER ----------------
+        st.markdown("### 🚦 Live Gate Tracker")
+        n_ = now_ist()
+        dn = {1: "Bullish", -1: "Bearish", 0: "Flat/NA"}
+        dirn_h = "CE" if trend_15 + trend_60 == 2 else "PE" if trend_15 + trend_60 == -2 else None
+        fii_conflict = ((fii_sentiment == "Net Bullish (Longs)" and dirn_h == "PE")
+                        or (fii_sentiment == "Net Bearish (Shorts)" and dirn_h == "CE"))
+        n_trades = len([t for t in ledger if t["State"] != "EXPIRED"])
+        grows = [
+            ("A. Permission", "Data feed live", "Kite + chain + candles", True),
+            ("A. Permission", "Trading window", n_.strftime("%a %H:%M IST"),
+             n_.weekday() < 5 and T_ENTRY_START <= n_.time() <= T_ENTRY_END),
+            ("A. Permission", "Fixed blackout", "10:00-10:15 / 13:30-13:45",
+             (not check_economic_calendar_blackout(n_.time())) if use_blackout else None),
+            ("A. Permission", "15m & 60m agree", f"15m {dn[trend_15]} | 60m {dn[trend_60]}",
+             trend_15 != 0 and trend_15 == trend_60),
+            ("A. Permission", "Not against FII bias", fii_sentiment, not fii_conflict),
+        ]
+        for name, val in gate_info["audit"].items():
+            if name.startswith("Gate 1") or name.startswith("Context"):
+                continue
+            sv = str(val)
+            grows.append(("B. Layers", name, sv, None if sv.startswith("N/A") else sv.startswith("PASS")))
+        if gate_info["score"] is not None:
+            grows.append(("B. Layers", "Confluence score", f"{gate_info['score'] * 100:.1f}% (need {min_score * 100:.0f}%)",
+                          gate_info["score"] >= min_score))
+        grows += [
+            ("C. Risk", "No active trade", "one at a time",
+             not any(t["State"] in ("WAITING", "OPEN") for t in ledger)),
+            ("C. Risk", "Daily trade limit", f"{n_trades}/{max_trades_day}", n_trades < max_trades_day),
+            ("C. Risk", "Daily loss cap", f"P&L ₹{ledger_stats['pnl']:,.0f}", ledger_stats["pnl"] > -abs(daily_loss_cap)),
+            ("C. Risk", "Symbol not traded today", "", not gate_info["dup"]),
+        ]
+        gstats = daily_state.setdefault("gate_stats", {})
+        for _, g, _, ok in grows:
+            if ok is None:
+                continue
+            e = gstats.setdefault(g, {"pass": 0, "fail": 0})
+            e["pass" if ok else "fail"] += 1
+        save_daily_state(daily_state)
+
+        blockers = [g for _, g, _, ok in grows if ok is False]
+        if blockers:
+            st.warning("⛔ Blocking right now: " + ", ".join(blockers))
+        else:
+            st.success("✅ All gates open right now.")
+        gdf = pd.DataFrame([{
+            "Group": grp, "Gate": g, "Now": ("✅" if ok else "❌" if ok is False else "➖"), "Detail": d,
+            "Open today": (f"{gstats[g]['pass'] * 100 // (gstats[g]['pass'] + gstats[g]['fail'])}%"
+                           if ok is not None and g in gstats else "—"),
+        } for grp, g, d, ok in grows])
+        show_df(gdf, hide_index=True)
+        st.caption("'Open today' = share of the 30-second checks today in which the gate was passing. "
+                   "The gates that are most often closed are the ones that decide how many trades you get.")
+
+        # ---------------- SMC VIEW (view-only) ----------------
+        st.markdown("### 🧭 SMC View (view-only — not used in trade decisions)")
+        tr_txt = {1: "Bullish (last break was up)", -1: "Bearish (last break was down)", 0: "Undetermined"}[smc["trend"]]
+        pd_txt = "n/a"
+        if hi is not None and lo is not None and hi > lo:
+            eq = (hi + lo) / 2
+            in_disc = spot_price < eq
+            fav = (in_disc and ce) or ((not in_disc) and (not ce))
+            pd_txt = (f"{'Discount' if in_disc else 'Premium'} (equilibrium ₹{eq:,.1f}) — "
+                      f"{'✅ favorable' if fav else '⚠️ not ideal'} for {active_trade_type}")
+        st.markdown(f"**Structure:** {tr_txt}  \n**Today's range:** {pd_txt}")
+        st.markdown(f"**Entry sequence for {active_trade_type}: {smc_done}/4**")
+        show_df(pd.DataFrame([{"Step": k, "Met": "✅" if v else "❌"} for k, v in smc_steps.items()]),
+                hide_index=True)
+        if smc["events"]:
+            ev = smc["events"][-6:][::-1]
+            show_df(pd.DataFrame([{"Time": e["time"], "Event": e["kind"],
+                                   "Direction": "Bullish" if e["dir"] == "bull" else "Bearish",
+                                   "Level": round(e["level"], 1)} for e in ev]), hide_index=True)
+        else:
+            st.caption("No structure events detected in recent candles.")
+        if smc["fvgs"]:
+            fv = smc["fvgs"][-4:][::-1]
+            st.markdown("**Unfilled fair value gaps**")
+            show_df(pd.DataFrame([{"Formed": f["time"], "Direction": "Bullish" if f["dir"] == "bull" else "Bearish",
+                                   "Zone": f"{f['bottom']:,.1f} – {f['top']:,.1f}",
+                                   "Price inside": "✅" if f["bottom"] <= spot_price <= f["top"] else "—"}
+                                  for f in fv]), hide_index=True)
+        st.caption("Rules: swing = 2 candles each side; BOS/CHoCH = a candle CLOSES beyond the last swing; "
+                   "sweep = wick beyond a swing but close back inside; FVG = 3-candle gap (≥0.03% of price). "
+                   "The sequence count is saved with each paper trade so we can test later if it helps.")
 
         st.markdown("---")
         if st.button("🚀 RUN FULL GREEKS & QUANT AUDIT"):
