@@ -579,6 +579,85 @@ def smc_sequence(res, direction, spot, lookback=24):
     return steps
 
 
+# ---------- Smart Money Concepts (VIEW-ONLY, not used in trade score) ----------
+def find_swings(c, left=2, right=2):
+    """Fractal swing highs/lows: list of (index, 'H'|'L', price). Confirmed only `right` candles later."""
+    sw = []
+    for i in range(left, len(c) - right):
+        if (all(c[i]["high"] > c[j]["high"] for j in range(i - left, i))
+                and all(c[i]["high"] >= c[j]["high"] for j in range(i + 1, i + right + 1))):
+            sw.append((i, "H", c[i]["high"]))
+        if (all(c[i]["low"] < c[j]["low"] for j in range(i - left, i))
+                and all(c[i]["low"] <= c[j]["low"] for j in range(i + 1, i + right + 1))):
+            sw.append((i, "L", c[i]["low"]))
+    return sw
+
+
+def _structure(sw):
+    H = [x for x in sw if x[1] == "H"]
+    L = [x for x in sw if x[1] == "L"]
+    if len(H) < 2 or len(L) < 2:
+        return "range"
+    hh, hl = H[-1][2] > H[-2][2], L[-1][2] > L[-2][2]
+    if hh and hl:
+        return "bull"
+    if (not hh) and (not hl):
+        return "bear"
+    return "range"
+
+
+def analyze_smc(c, spot, hi, lo, right=2, lookback=12):
+    """c = CLOSED 5-min candles. Detects structure, BOS/CHoCH, liquidity sweep, unfilled FVG, premium/discount."""
+    out = {"trend": "NA", "break": None, "sweep": None, "fvg_bull": None, "fvg_bear": None, "zone": None}
+    if not c or len(c) < 20:
+        return out
+    c = c[-80:]
+    n = len(c)
+    sw = find_swings(c, 2, right)
+    out["trend"] = _structure(sw)
+    for k in range(max(n - lookback, 3), n):
+        vis = [x for x in sw if x[0] + right <= k - 1]
+        SH = [x for x in vis if x[1] == "H"]
+        SL = [x for x in vis if x[1] == "L"]
+        if not SH or not SL:
+            continue
+        sh, sl, ago, before = SH[-1][2], SL[-1][2], n - 1 - k, _structure(vis)
+        if c[k]["close"] > sh and c[k - 1]["close"] <= sh:
+            out["break"] = {"type": "CHoCH" if before == "bear" else "BOS", "dir": "bull", "ago": ago, "level": sh}
+        elif c[k]["close"] < sl and c[k - 1]["close"] >= sl:
+            out["break"] = {"type": "CHoCH" if before == "bull" else "BOS", "dir": "bear", "ago": ago, "level": sl}
+        if c[k]["low"] < sl and c[k]["close"] > sl:
+            out["sweep"] = {"dir": "bull", "ago": ago, "level": sl}   # sell-side liquidity taken
+        elif c[k]["high"] > sh and c[k]["close"] < sh:
+            out["sweep"] = {"dir": "bear", "ago": ago, "level": sh}   # buy-side liquidity taken
+    min_gap = (spot or 0) * 0.0002
+    for i in range(max(0, n - 40), n - 2):
+        a, d = c[i], c[i + 2]
+        if d["low"] - a["high"] > min_gap:
+            zl, zh = a["high"], d["low"]
+            if not any(c[j]["low"] <= zl for j in range(i + 3, n)):
+                out["fvg_bull"] = (zl, zh, n - 1 - (i + 2))
+        if a["low"] - d["high"] > min_gap:
+            zl, zh = d["high"], a["low"]
+            if not any(c[j]["high"] >= zh for j in range(i + 3, n)):
+                out["fvg_bear"] = (zl, zh, n - 1 - (i + 2))
+    if hi and lo and hi > lo and spot:
+        out["zone"] = "discount" if spot < (hi + lo) / 2 else "premium"
+    return out
+
+
+def smc_checklist(smc, spot, trade_type):
+    want = "bull" if trade_type == "CE" else "bear"
+    fvg = smc["fvg_bull"] if trade_type == "CE" else smc["fvg_bear"]
+    in_fvg = bool(fvg and spot and fvg[0] * 0.999 <= spot <= fvg[1] * 1.001)
+    return {
+        "sweep": bool(smc["sweep"] and smc["sweep"]["dir"] == want),
+        "break": bool(smc["break"] and smc["break"]["dir"] == want),
+        "fvg": in_fvg,
+        "zone": smc["zone"] == ("discount" if trade_type == "CE" else "premium"),
+    }
+
+
 def tf_trend(mtf, key):
     """+1 bullish, -1 bearish, 0 flat/no data (last 3 closed candles of that timeframe)."""
     if not mtf or "error" in mtf:
@@ -991,6 +1070,8 @@ with tab_dashboard:
         if hi is not None and lo is not None and hi > lo:
             retest_zone = (hi - 0.618 * (hi - lo)) if ce else (lo + 0.618 * (hi - lo))
         retest_ok, retest_msg = check_gautam_jha_retest_confirmation(mtf["5m"], retest_zone, active_trade_type)
+        smc = analyze_smc(closed_5m, spot_price, hi, lo)
+        smc_checks = smc_checklist(smc, spot_price, active_trade_type)
 
         st.markdown("### 📊 Gautam Jha Confirmation Retest Indicator")
         zone_txt = f"₹{retest_zone:,.1f} (Fib 61.8% of today's swing)" if retest_zone else "N/A (need ≥6 candles today)"
@@ -1002,6 +1083,35 @@ with tab_dashboard:
             • <b>Confirmation:</b> {retest_msg}<br>
             • <b>Target Ratio:</b> 1:{min_rr} R:R | <b>Active Bias:</b> <span style="color:{bias_color};font-weight:bold;">{active_trade_type}</span></div></div>""",
             unsafe_allow_html=True)
+
+        st.markdown(f"### 🧩 Smart Money Concepts (view-only, 5-min) — for {active_trade_type}")
+        want_dir = "bull" if ce else "bear"
+
+        def al(ok):
+            return "✅" if ok else "❌"
+
+        brk, swp = smc["break"], smc["sweep"]
+        fv = smc["fvg_bull"] if ce else smc["fvg_bear"]
+        smc_rows = [
+            {"Concept": "Market structure", "Reading": {"bull": "Bullish (HH + HL)", "bear": "Bearish (LH + LL)",
+                                                       "range": "Range / mixed", "NA": "Not enough candles"}[smc["trend"]],
+             "Fits trade": al(smc["trend"] == want_dir)},
+            {"Concept": "Last BOS / CHoCH (12 candles)",
+             "Reading": f"{brk['type']} {brk['dir']} through {brk['level']:,.1f}, {brk['ago']} candle(s) ago" if brk else "None",
+             "Fits trade": al(smc_checks["break"])},
+            {"Concept": "Liquidity sweep (12 candles)",
+             "Reading": f"{swp['dir']} sweep of {swp['level']:,.1f}, {swp['ago']} candle(s) ago" if swp else "None",
+             "Fits trade": al(smc_checks["sweep"])},
+            {"Concept": "Unfilled FVG (price inside/near?)",
+             "Reading": f"{fv[0]:,.1f} – {fv[1]:,.1f} ({fv[2]} candle(s) old)" if fv else "None",
+             "Fits trade": al(smc_checks["fvg"])},
+            {"Concept": "Premium / Discount (today's range)",
+             "Reading": (smc["zone"] or "N/A").title(), "Fits trade": al(smc_checks["zone"])},
+        ]
+        show_df(pd.DataFrame(smc_rows), hide_index=True)
+        st.caption(f"SMC checklist: {sum(smc_checks.values())}/4 for {active_trade_type}. "
+                   "View-only: it does NOT affect the score or trade capture. It is saved with every paper trade "
+                   "so we can test later whether it separates winners from losers.")
 
         st.markdown("### 🎯 Institutional Sniper 10-Layer Confluence Engine")
         atm = round(spot_price / strike_step) * strike_step
@@ -1043,6 +1153,9 @@ with tab_dashboard:
                 audit_trail.update({  # context saved with every audit snapshot for later study
                     "Context: 15m trend": _dn[trend_15], "Context: 60m trend": _dn[trend_60],
                     "Context: SMC steps (of 4)": smc_done, "Context: SMC structure": {1: "Bullish", -1: "Bearish", 0: "Undetermined"}[smc["trend"]], "Context: VIX": india_vix, "Context: PCR": overall_pcr, "Context: Near-ATM PCR": pcr_near,
+                    "Context: SMC structure": smc["trend"],
+                    "Context: SMC checklist": f"{sum(smc_checks.values())}/4",
+                    **{f"Context: SMC {k}": v for k, v in smc_checks.items()},
                 })
                 gate_info.update(score=score, audit=audit_trail)
                 approved = status.startswith("EXECUTE")
