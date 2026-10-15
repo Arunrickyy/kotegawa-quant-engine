@@ -236,6 +236,8 @@ fii_sentiment = st.sidebar.selectbox(
 min_rr = st.sidebar.slider("Min Risk-Reward Ratio", 1.0, 5.0, 4.0, 0.5)
 sl_pct = st.sidebar.slider("Stop Loss Drop (%)", 10.0, 40.0, 25.0, 5.0) / 100.0
 min_score = st.sidebar.slider("Min Confluence Score (%)", 60, 100, 85, 5) / 100.0
+ext_ratio = st.sidebar.selectbox("Fib extension target", [1.272, 1.618, 2.618, 3.18, 3.618], index=3)
+sl_buffer = st.sidebar.number_input("SL buffer beyond hammer (index pts)", 1.0, 10.0, 2.5, 0.5)
 
 st.sidebar.markdown("---")
 st.sidebar.header("🛡️ Risk Controls (Paper)")
@@ -345,6 +347,29 @@ def fetch_mtf(_api_key, _token, nse_symbol):
             out[key] = k.historical_data(tok, from_dt, to_dt, interval)
             time.sleep(0.35)  # Kite historical API: ~3 req/sec limit
         return out
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@st.cache_data(ttl=25, show_spinner=False)
+def fetch_fut_candles(_api_key, _token, nfo_name):
+    """5-min candles (with volume) of the nearest index future. Used for POC and the volume layer."""
+    try:
+        k = KiteConnect(api_key=_api_key)
+        k.set_access_token(_token)
+        df = load_instruments(_api_key, _token, "NFO")
+        f = df[(df["name"] == nfo_name) & (df["instrument_type"] == "FUT")].copy()
+        if f.empty:
+            return {"error": "no futures contract found"}
+        f["expiry"] = pd.to_datetime(f["expiry"])
+        f = f[f["expiry"] >= pd.Timestamp(now_ist().date())]
+        if f.empty:
+            return {"error": "no live futures expiry"}
+        row = f.sort_values("expiry").iloc[0]
+        to_dt = now_ist().replace(tzinfo=None)
+        time.sleep(0.4)
+        cand = k.historical_data(int(row["instrument_token"]), to_dt - datetime.timedelta(days=6), to_dt, "5minute")
+        return {"symbol": row["tradingsymbol"], "candles": cand}
     except Exception as e:
         return {"error": str(e)}
 
@@ -579,6 +604,95 @@ def smc_sequence(res, direction, spot, lookback=24):
     return steps
 
 
+# ---------- GTI / Gautam Jha spec helpers ----------
+def zone_touched(candles, zl, zh, lookback=12):
+    """True if any of the last `lookback` 5-min candles today overlapped the 0.618 zone."""
+    if zl is None or not candles:
+        return None
+    today = now_ist().date()
+    recent = [c for c in candles if c["date"].date() == today][-lookback:]
+    if not recent:
+        return None
+    return any(c["low"] <= zh and c["high"] >= zl for c in recent)
+
+
+def compute_poc(candles, bin_size):
+    """Today's session Point of Control (price bin with the most traded volume), futures price terms."""
+    today = now_ist().date()
+    td = [c for c in candles if c["date"].date() == today and c.get("volume", 0) > 0]
+    if len(td) < 6:
+        return None
+    vol = {}
+    for c in td:
+        lo_b, hi_b = int(c["low"] // bin_size), int(c["high"] // bin_size)
+        nb = hi_b - lo_b + 1
+        for b in range(lo_b, hi_b + 1):
+            vol[b] = vol.get(b, 0) + c["volume"] / nb
+    best = max(vol, key=vol.get)
+    return (best + 0.5) * bin_size
+
+
+def volume_ratio(fut_candles, ts):
+    """Volume of the candle at timestamp `ts` divided by the 20-candle average volume before it."""
+    if not fut_candles:
+        return None
+    idx = next((i for i, c in enumerate(fut_candles) if c["date"] == ts), None)
+    if idx is None or idx < 20:
+        return None
+    sma = sum(c["volume"] for c in fut_candles[idx - 20: idx]) / 20
+    return fut_candles[idx]["volume"] / sma if sma > 0 else None
+
+
+def check_weak_hammer_trigger(candles, zl, zh, trade_type):
+    """Layer 6. Last CLOSED candle must be a small-body rejection candle (wick >= 2x body) whose
+    wick-extreme sits inside the 0.618 zone; the live candle must then break its high (CE) / low (PE).
+    Returns (ok, message, hammer_info_or_None)."""
+    if not candles or len(candles) < 3 or zl is None:
+        return False, "No data / no 0.618 zone yet", None
+    h, cur = candles[-2], candles[-1]
+    rng = h["high"] - h["low"]
+    if rng <= 0:
+        return False, "⏳ Waiting for: hammer candle", None
+    body = abs(h["close"] - h["open"])
+    lower = min(h["open"], h["close"]) - h["low"]
+    upper = h["high"] - max(h["open"], h["close"])
+    small = body <= 0.35 * rng
+    if trade_type == "CE":
+        wick_ok, in_zone, brk = lower >= 2 * body and lower > upper, zl <= h["low"] <= zh, cur["close"] > h["high"]
+    else:
+        wick_ok, in_zone, brk = upper >= 2 * body and upper > lower, zl <= h["high"] <= zh, cur["close"] < h["low"]
+    info = {"low": h["low"], "high": h["high"], "date": h["date"]} if (small and wick_ok and in_zone) else None
+    if info and brk:
+        return True, f"✅ WEAK HAMMER in 0.618 zone + live candle broke its {'high' if trade_type == 'CE' else 'low'}", info
+    missing = [n for n, ok in [("small body", small), ("2x rejection wick", wick_ok),
+                               ("hammer inside 0.618 zone", in_zone), ("live break of hammer", brk)] if not ok]
+    return False, "⏳ Waiting for: " + ", ".join(missing), info
+
+
+def compute_fib_trade_params(spot, ttype, hammer, hi, lo, ratio, buffer, K, T, iv, ltp):
+    """SL = hammer extreme +/- buffer; target = Fibonacci extension of today's swing projected from the hammer.
+    Index levels are converted to option prices by re-pricing with Black-Scholes at the solved IV."""
+    if not hammer or hi is None or lo is None or hi <= lo or iv is None:
+        return None
+    d = hi - lo
+    if ttype == "CE":
+        sl_idx, tgt_idx = hammer["low"] - buffer, hammer["low"] + ratio * d
+        risk, reward = spot - sl_idx, tgt_idx - spot
+    else:
+        sl_idx, tgt_idx = hammer["high"] + buffer, hammer["high"] - ratio * d
+        risk, reward = sl_idx - spot, spot - tgt_idx
+    if risk <= 0 or reward <= 0 or tgt_idx <= 0:
+        return None
+    sig = iv / 100
+    base = bs_price(spot, K, T, RISK_FREE, sig, ttype)
+    sl_opt = max(0.05, ltp + bs_price(sl_idx, K, T, RISK_FREE, sig, ttype) - base)
+    tgt_opt = ltp + bs_price(tgt_idx, K, T, RISK_FREE, sig, ttype) - base
+    entry = round(ltp * 0.98, 2)
+    rr_opt = (tgt_opt - entry) / (entry - sl_opt) if entry > sl_opt else None
+    return {"sl_idx": sl_idx, "tgt_idx": tgt_idx, "rr_idx": reward / risk, "entry": entry,
+            "sl": round(sl_opt, 2), "tgt": round(tgt_opt, 2), "rr_opt": rr_opt}
+
+
 # ---------- Smart Money Concepts (VIEW-ONLY, not used in trade score) ----------
 def find_swings(c, left=2, right=2):
     """Fractal swing highs/lows: list of (index, 'H'|'L', price). Confirmed only `right` candles later."""
@@ -747,10 +861,10 @@ def check_economic_calendar_blackout(t):
 LAYER_WEIGHTS = {
     "Layer 2 (Macro Trend & PCR)": 0.11,
     "Layer 3 (VWAP/TWAP Anchor)": 0.11,
-    "Layer 4 (Price Action Structure)": 0.11,
-    "Layer 5 (Fibonacci Golden Pocket)": 0.11,
-    "Layer 6 (Gautam Jha Retest Confirmation)": 0.11,
-    "Layer 7 (Volume Expansion Surge)": 0.10,
+    "Layer 4 (POC / FVG Confluence)": 0.11,
+    "Layer 5 (0.618 Golden Pocket Touch)": 0.11,
+    "Layer 6 (Weak Hammer + Gautam Jha Break)": 0.11,
+    "Layer 7 (GTI Volume ≥ 1.5x SMA20)": 0.10,
     "Layer 8 (Near-ATM OI Imbalance)": 0.10,
     "Layer 9 (Greeks: Delta & IV)": 0.11,
     "Layer 10 (Sector Harmony & Momentum)": 0.14,
@@ -767,16 +881,23 @@ def evaluate_confluence(md, trade_type, threshold):
     audit["Gate 2 (Stop-Loss Shield)"] = "PASS" if md["sl_valid"] else "FAIL"
     if not md["sl_valid"]:
         return 0.0, audit, "HOLD: Invalid Stop-Loss"
+    rr = md.get("rr")
+    if rr is not None:
+        rr_ok = rr >= md["min_rr"]
+        audit[f"Gate 3 (Fib R:R >= 1:{md['min_rr']})"] = f"{'PASS' if rr_ok else 'FAIL'} (1:{rr:.1f})"
+        if not rr_ok:
+            return 0.0, audit, f"HOLD: Fib target gives R:R 1:{rr:.1f}, below 1:{md['min_rr']}"
 
     ce = trade_type == "CE"
     pcr, near = md.get("pcr"), md.get("pcr_near")
     layers = {
         "Layer 2 (Macro Trend & PCR)": None if pcr is None else (pcr >= 0.90 if ce else pcr <= 1.25),
         "Layer 3 (VWAP/TWAP Anchor)": None if md.get("twap") is None else ((md["spot"] > md["twap"]) if ce else (md["spot"] < md["twap"])),
-        "Layer 4 (Price Action Structure)": md["candle_bias"] == ("bull" if ce else "bear"),
-        "Layer 5 (Fibonacci Golden Pocket)": md.get("fib_ok"),
-        "Layer 6 (Gautam Jha Retest Confirmation)": md["retest_ok"],
-        "Layer 7 (Volume Expansion Surge)": None,   # index has no volume -> not evaluable
+        "Layer 4 (POC / FVG Confluence)": (md["fvg_in"] if md.get("poc_aligned") is None
+                                           else (md["poc_aligned"] or md["fvg_in"])),
+        "Layer 5 (0.618 Golden Pocket Touch)": md.get("fib_ok"),
+        "Layer 6 (Weak Hammer + Gautam Jha Break)": md["retest_ok"],
+        "Layer 7 (GTI Volume ≥ 1.5x SMA20)": None if md.get("vol_ratio") is None else md["vol_ratio"] >= 1.5,
         "Layer 8 (Near-ATM OI Imbalance)": None if near is None else (near >= 0.92 if ce else near <= 1.28),
         "Layer 9 (Greeks: Delta & IV)": md.get("greeks_ok"),
         "Layer 10 (Sector Harmony & Momentum)": None,  # not implemented -> not evaluable
@@ -795,8 +916,8 @@ def evaluate_confluence(md, trade_type, threshold):
     if eval_w / total_w < 0.60:
         return 0.0, audit, "HOLD: Not enough live data to evaluate layers"
     score = passed_w / eval_w
-    if not layers["Layer 6 (Gautam Jha Retest Confirmation)"]:
-        return score, audit, "HOLD: Gautam Jha retest confirmation not met (mandatory)"
+    if not layers["Layer 6 (Weak Hammer + Gautam Jha Break)"]:
+        return score, audit, "HOLD: Weak hammer + Gautam Jha break not met (mandatory)"
     if score >= threshold:
         return score, audit, f"EXECUTE_{trade_type}_SNIPER (Score {score * 100:.1f}%)"
     return score, audit, f"HOLD: Score {score * 100:.1f}% below {threshold * 100:.0f}% threshold"
@@ -986,6 +1107,7 @@ mtf = None
 if kite_client:
     mtf = fetch_mtf(api_key, access_token, cfg["nse"])
 mtf_ok = bool(mtf) and "error" not in mtf
+fut = fetch_fut_candles(api_key, access_token, cfg["nfo"]) if kite_client else None
 
 overall_pcr = pcr_near = None
 if kite_client and chain is not None and spot_price:
@@ -1066,15 +1188,29 @@ with tab_dashboard:
         smc_done = sum(smc_steps.values())
         pattern_name, candle_bias = detect_candlestick_patterns(closed_5m)
         hi, lo = levels["swing_high"], levels["swing_low"]
-        retest_zone = None
+        retest_zone = zone_w = zl = zh = None
         if hi is not None and lo is not None and hi > lo:
             retest_zone = (hi - 0.618 * (hi - lo)) if ce else (lo + 0.618 * (hi - lo))
-        retest_ok, retest_msg = check_gautam_jha_retest_confirmation(mtf["5m"], retest_zone, active_trade_type)
+            zone_w = max(0.04 * (hi - lo), spot_price * 0.0005)
+            zl, zh = retest_zone - zone_w, retest_zone + zone_w
+        retest_ok, retest_msg, hammer = check_weak_hammer_trigger(mtf["5m"], zl, zh, active_trade_type)
+        zone_hit = zone_touched(mtf["5m"], zl, zh)
+        fut_ok = bool(fut) and "error" not in fut
+        fut_candles = fut["candles"] if fut_ok else []
+        poc_idx = None
+        if fut_candles:
+            _poc = compute_poc(fut_candles, max(strike_step / 10, 1))
+            if _poc is not None:
+                poc_idx = _poc - (fut_candles[-1]["close"] - spot_price)  # futures price -> index terms
+        poc_aligned = None if (poc_idx is None or zone_w is None) else bool(abs(poc_idx - retest_zone) <= 1.5 * zone_w)
+        vol_ratio = volume_ratio(fut_candles, hammer["date"]) if hammer else None
+        if not fut_ok:
+            st.caption("Futures volume unavailable: POC alignment and the volume layer show N/A.")
         smc = analyze_smc(closed_5m, spot_price, hi, lo)
         smc_checks = smc_checklist(smc, spot_price, active_trade_type)
 
         st.markdown("### 📊 Gautam Jha Confirmation Retest Indicator")
-        zone_txt = f"₹{retest_zone:,.1f} (Fib 61.8% of today's swing)" if retest_zone else "N/A (need ≥6 candles today)"
+        zone_txt = f"₹{retest_zone:,.1f} ± {zone_w:,.0f} pts (Fib 0.618 of today's swing)" if retest_zone else "N/A (need ≥6 candles today)"
         st.markdown(
             f"""<div style="background-color:#161b22;border:1px solid #30363d;border-left:6px solid {bias_color};padding:20px;border-radius:10px;margin-bottom:20px;">
             <div style="color:{bias_color};font-size:1.2rem;font-weight:800;">🔍 {pattern_name} ({active_trade_type} Mode{view_tag})</div>
@@ -1140,11 +1276,20 @@ with tab_dashboard:
                 if iv is not None:
                     dlt, _, _, _ = calculate_greeks(spot_price, atm_k, T_years, RISK_FREE, iv / 100, active_trade_type)
                     greeks_ok = (iv < 45.0) and (0.35 <= abs(dlt) <= 0.65)
-                snip_entry, snip_sl, snip_tgt = calculate_sniper_parameters(sniper_ltp, sl_pct, min_rr)
+                fib_tp = compute_fib_trade_params(spot_price, active_trade_type, hammer, hi, lo, ext_ratio,
+                                                  sl_buffer, atm_k, T_years, iv, sniper_ltp)
+                if fib_tp:
+                    snip_entry, snip_sl, snip_tgt = fib_tp["entry"], fib_tp["sl"], fib_tp["tgt"]
+                    fib_note = (f"| <b>R:R</b> index 1:{fib_tp['rr_idx']:.1f}"
+                                + (f" · option 1:{fib_tp['rr_opt']:.1f}" if fib_tp["rr_opt"] else ""))
+                else:  # preview only; Layer 6 will block capture without a hammer
+                    snip_entry, snip_sl, snip_tgt = calculate_sniper_parameters(sniper_ltp, sl_pct, min_rr)
+                    fib_note = "| <i>(preview levels: no hammer setup yet)</i>"
                 md = {
                     "spot": spot_price, "pcr": overall_pcr, "pcr_near": pcr_near,
                     "twap": levels["twap"], "candle_bias": candle_bias,
-                    "fib_ok": fib_golden_ok(mtf["5m"], hi, lo, ce),
+                    "fib_ok": zone_hit, "fvg_in": smc_checks["fvg"], "poc_aligned": poc_aligned,
+                    "vol_ratio": vol_ratio, "rr": fib_tp["rr_idx"] if fib_tp else None, "min_rr": min_rr,
                     "retest_ok": retest_ok, "greeks_ok": greeks_ok,
                     "sl_valid": 0 < snip_sl < snip_entry,
                 }
@@ -1154,6 +1299,10 @@ with tab_dashboard:
                     "Context: 15m trend": _dn[trend_15], "Context: 60m trend": _dn[trend_60],
                     "Context: SMC steps (of 4)": smc_done, "Context: SMC structure": {1: "Bullish", -1: "Bearish", 0: "Undetermined"}[smc["trend"]], "Context: VIX": india_vix, "Context: PCR": overall_pcr, "Context: Near-ATM PCR": pcr_near,
                     "Context: SMC structure": smc["trend"],
+                    "Context: Fib ext ratio": ext_ratio,
+                    "Context: Volume ratio": round(vol_ratio, 2) if vol_ratio is not None else None,
+                    "Context: POC aligned": poc_aligned,
+                    "Context: R:R index": round(fib_tp["rr_idx"], 2) if fib_tp else None,
                     "Context: SMC checklist": f"{sum(smc_checks.values())}/4",
                     **{f"Context: SMC {k}": v for k, v in smc_checks.items()},
                 })
@@ -1165,10 +1314,19 @@ with tab_dashboard:
                     <div style="color:{border};font-size:1.25rem;font-weight:800;">🔥 {active_trade_type} VAULT{view_tag}: {sym} — {status}</div>
                     <div style="color:#f0f6fc;font-size:0.95rem;margin-top:8px;">
                     • <b>Limit Entry:</b> ₹{snip_entry} | <b>Stop Loss:</b> ₹{snip_sl} | <b>Target (1:{min_rr}):</b>
-                    <span style="color:#56d364;font-weight:bold;">₹{snip_tgt}</span> | <b>IV:</b> {fmt(iv)}%</div></div>""",
+                    <span style="color:#56d364;font-weight:bold;">₹{snip_tgt}</span> | <b>IV:</b> {fmt(iv)}% {fib_note}</div></div>""",
                     unsafe_allow_html=True)
                 with st.expander("Layer-by-layer checklist"):
                     st.json(audit_trail)
+                gti_rows = [
+                    {"Item": "Daily POC (index-equivalent)", "Value": f"{poc_idx:,.1f}" if poc_idx else "N/A"},
+                    {"Item": "Hammer candle volume vs 20-SMA", "Value": f"{vol_ratio:.2f}x (need 1.5x)" if vol_ratio is not None else "N/A"},
+                    {"Item": "Hammer candle (low – high)", "Value": f"{hammer['low']:,.1f} – {hammer['high']:,.1f}" if hammer else "None in 0.618 zone"},
+                    {"Item": "SL (index)", "Value": f"{fib_tp['sl_idx']:,.1f}" if fib_tp else "—"},
+                    {"Item": f"Fib {ext_ratio} target (index)", "Value": f"{fib_tp['tgt_idx']:,.1f}" if fib_tp else "—"},
+                    {"Item": "Option SL / Target (₹)", "Value": f"{fib_tp['sl']} / {fib_tp['tgt']}" if fib_tp else "—"},
+                ]
+                show_df(pd.DataFrame(gti_rows), hide_index=True)
 
                 ok_new, why = can_open_new_trade(ledger, ledger_stats)
                 existing = [t["Symbol"] for t in ledger]
@@ -1303,11 +1461,9 @@ with tab_dashboard:
                                  "Solved IV (%)": None, "Verdict": "❌ NO VALID IV / ILLIQUID"})
                     continue
                 d, th, g, v = calculate_greeks(spot_price, k, T_years, RISK_FREE, iv_ / 100, active_trade_type)
-                en, sl_v, tg = calculate_sniper_parameters(ltp, sl_pct, min_rr)
                 recs.append({
                     "Strike": k, "Type": active_trade_type, "LTP (₹)": ltp, "Solved IV (%)": iv_,
-                    "Delta": d, "Theta": th, "Gamma": g, "Vega": v, "Entry (₹)": en,
-                    "Stop Loss (₹)": sl_v, f"Target (1:{min_rr})": tg,
+                    "Delta": d, "Theta": th, "Gamma": g, "Vega": v,
                     "Verdict": f"✅ APPROVED" if iv_ < 45 else "❌ REJECTED (High IV)",
                 })
             st.markdown(f"### 📋 Black-Scholes Greeks Matrix ({selected_index})")
